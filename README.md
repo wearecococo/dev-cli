@@ -138,6 +138,8 @@ a path, or no argument (uses cwd if it has a `manifest.yaml`).
 | `cococo publish [folder]` | Validate then publish. Flips DRAFT → ACTIVE. |
 | `cococo pull <integrationId> [-v X] [-f]` | Materialize a remote draft into `./integrations/<short-name>/`. Use `-f` to overwrite a non-empty folder. |
 | `cococo setup-mcp claude [-n name] [-u url] [-s scope]` | Register the cococo MCP endpoint with Claude Code. Derives the URL from `COCOCO_ENDPOINT` (`/graphql` → `/mcp`) and uses `COCOCO_TOKEN` for auth. Shells out to `claude mcp add`; prints fallback instructions if the `claude` CLI isn't installed. |
+| `cococo mcp swagger <path>` | Run a stdio MCP server that exposes read-only discovery tools (`get_info`, `list_operations`, `search_operations`, `get_operation`, `list_tags`, `get_schema`) over a local OpenAPI/Swagger 2.0 or 3.x spec (`.json` or `.yaml`). `$ref`s are resolved on demand with cycle detection. Useful when authoring an integration that targets a third-party API — point Claude Code at the spec so it can discover endpoints and schemas without you pasting them in. |
+| `cococo mcp add <path> [-n name] [-s scope]` | Convenience wrapper that registers the swagger MCP server with Claude Code in one step. Parses the spec, derives a name from `info.title` (override with `-n`), resolves the path to absolute, and runs `claude mcp add --transport stdio … -- bunx cococo mcp swagger <path>`. Prints fallback instructions if the `claude` CLI isn't installed. |
 
 ## Worked example
 

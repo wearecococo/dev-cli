@@ -17,6 +17,7 @@
     "test:integration": "COCOCO_INTEGRATION_TEST=1 bun test tests/integration.test.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "yaml": "^2.6.1"
   },

@@ -9,6 +9,8 @@ import { runValidate } from "./commands/validate.ts";
 import { runPublish } from "./commands/publish.ts";
 import { runPull } from "./commands/pull.ts";
 import { runSetupMcp } from "./commands/setup-mcp.ts";
+import { runMcpSwagger } from "./commands/mcp.ts";
+import { runMcpAdd } from "./commands/mcp-add.ts";
 
 const program = new Command();
 
@@ -99,6 +101,36 @@ program
       opts: { name: string; url?: string; scope?: "local" | "project" | "user" },
     ) => {
       await runSetupMcp(client, opts, apiOpts());
+    },
+  );
+
+const mcp = program
+  .command("mcp")
+  .description("Local MCP servers for use with LLM clients.");
+
+mcp
+  .command("swagger <path>")
+  .description(
+    "Run a stdio MCP server that exposes read-only discovery tools over a local OpenAPI/Swagger spec (.json or .yaml).",
+  )
+  .action(async (specPath: string) => {
+    await runMcpSwagger(specPath);
+  });
+
+mcp
+  .command("add <path>")
+  .description(
+    "Register the swagger MCP server for a local spec with an LLM client (currently: claude).",
+  )
+  .option("-n, --name <name>", "Name to register the server under (default: derived from spec title)")
+  .option("-s, --scope <scope>", "Scope to pass to the client (local | project | user)")
+  .option("-c, --client <client>", "LLM client to register with", "claude")
+  .action(
+    async (
+      specPath: string,
+      opts: { name?: string; scope?: "local" | "project" | "user"; client: string },
+    ) => {
+      await runMcpAdd(specPath, opts);
     },
   );
 
