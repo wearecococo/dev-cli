@@ -1,0 +1,27 @@
+{
+  "name": "@wearecococo/dev-cli",
+  "version": "0.1.0",
+  "description": "CLI for authoring cococo integration drafts against the platform GraphQL API.",
+  "type": "module",
+  "bin": {
+    "cococo": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "tsconfig.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests",
+    "test:integration": "COCOCO_INTEGRATION_TEST=1 bun test tests/integration.test.ts"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.3"
+  }
+}
