@@ -8,10 +8,14 @@ import {
   shortName,
 } from "../manifest.ts";
 import { MANIFEST_TS_FILENAME, type ManifestFormat } from "../loader.ts";
-import { printManifestTs } from "../printer.ts";
+import { CUSTOM_APPS_DIR, INTEGRATIONS_DIR } from "../project.ts";
+import { printAppManifestTs, printManifestTs } from "../printer.ts";
 import { timerHandlerPath } from "../sources.ts";
 import { assertDevCliResolvable } from "../dev-cli-resolution.ts";
-import type { EngineVersion } from "../graphql/operations.ts";
+import type {
+  CustomAppKind,
+  EngineVersion,
+} from "../graphql/operations.ts";
 
 const STARTER_MAIN_LUA_V1 = `-- Entry script for this integration (engineVersion 1).
 -- Subscriptions and timers declared in the manifest dispatch into the
@@ -41,9 +45,21 @@ export type InitOptions = {
   version: string;
   engineVersion?: EngineVersion;
   format?: ManifestFormat;
+  /** "integration" (default) scaffolds under integrations/; "app" under custom_apps/. */
+  type?: "integration" | "app";
+  /** Custom-app only — defaults to PAGE. */
+  appKind?: CustomAppKind;
 };
 
-export async function runInit(integrationId: string, opts: InitOptions): Promise<void> {
+export async function runInit(idOrHandle: string, opts: InitOptions): Promise<void> {
+  const type = opts.type ?? "integration";
+  if (type === "app") {
+    return runInitCustomApp(idOrHandle, opts);
+  }
+  return runInitIntegration(idOrHandle, opts);
+}
+
+async function runInitIntegration(integrationId: string, opts: InitOptions): Promise<void> {
   if (!integrationId.includes(".")) {
     throw new Error(
       `integrationId should be reverse-domain (e.g. com.acme.foo), got: ${integrationId}`,
@@ -69,7 +85,7 @@ export async function runInit(integrationId: string, opts: InitOptions): Promise
   }
 
   const folderName = shortName(integrationId);
-  const target = resolve(process.cwd(), "integrations", folderName);
+  const target = resolve(process.cwd(), INTEGRATIONS_DIR, folderName);
 
   if (existsSync(target)) {
     throw new Error(`Folder already exists: ${target}`);
@@ -113,7 +129,90 @@ export async function runInit(integrationId: string, opts: InitOptions): Promise
   }
 
   console.log(
-    `Created integrations/${folderName}/ (engineVersion ${engineVersion}, ${format})`,
+    `Created ${INTEGRATIONS_DIR}/${folderName}/ (engineVersion ${engineVersion}, ${format})`,
   );
   for (const path of created) console.log(`  ${path}`);
+}
+
+const STARTER_APP_TEMPLATE = `<div class="p-6 space-y-3">
+  <h1 class="text-2xl font-bold">{{ name }}</h1>
+  <p class="opacity-70">Scaffold from cococo init.</p>
+</div>
+`;
+
+const STARTER_APP_SCRIPT = `// Custom-app client script (engineVersion 2).
+// Top-level returns are ignored; expose state via \`setupReturn = { ... }\`
+// when the host iframe boots.
+
+const name = ref("Hello");
+const setupReturn = { name };
+`;
+
+const STARTER_APP_SERVER_LUA = `-- Optional Lua RPC handlers for the custom app (CUSTOM_APP role).
+-- Populate the global \`exports\` table; the host dispatches calls as
+-- \`exports.<method>(input)\`.
+
+exports = {}
+
+function exports.ping()
+  return { ok = true }
+end
+`;
+
+async function runInitCustomApp(handle: string, opts: InitOptions): Promise<void> {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(handle)) {
+    throw new Error(
+      `Custom app handle should be a URL-safe slug (lowercase letters, digits, ` +
+        `hyphens; must start with a letter or digit). Got: ${handle}`,
+    );
+  }
+  if (opts.format === "yaml") {
+    throw new Error(
+      `Custom apps are TS-only — there's no YAML manifest format. ` +
+        `Drop '--format yaml' and re-run.`,
+    );
+  }
+
+  assertDevCliResolvable(process.cwd());
+
+  const target = resolve(process.cwd(), CUSTOM_APPS_DIR, handle);
+  if (existsSync(target)) {
+    throw new Error(`Folder already exists: ${target}`);
+  }
+  mkdirSync(target, { recursive: true });
+
+  const kind = opts.appKind ?? "PAGE";
+  const name = humaniseHandle(handle);
+
+  writeFileSync(join(target, "template.vue"), STARTER_APP_TEMPLATE);
+  writeFileSync(join(target, "script.js"), STARTER_APP_SCRIPT);
+  writeFileSync(join(target, "server.lua"), STARTER_APP_SERVER_LUA);
+
+  writeFileSync(
+    join(target, MANIFEST_TS_FILENAME),
+    printAppManifestTs({
+      handle,
+      name,
+      kind,
+      templatePath: "template.vue",
+      scriptPath: "script.js",
+      serverApiPath: "server.lua",
+    }),
+  );
+
+  console.log(
+    `Created ${CUSTOM_APPS_DIR}/${handle}/ (custom app, kind=${kind})`,
+  );
+  console.log(`  ${MANIFEST_TS_FILENAME}`);
+  console.log(`  template.vue`);
+  console.log(`  script.js`);
+  console.log(`  server.lua`);
+}
+
+function humaniseHandle(handle: string): string {
+  return handle
+    .split("-")
+    .filter((p) => p.length > 0)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
 }

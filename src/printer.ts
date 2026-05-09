@@ -5,6 +5,7 @@ import {
   timerHandlerPath,
 } from "./sources.ts";
 import type { WireManifest } from "./manifest.ts";
+import type { CustomAppKind } from "./graphql/operations.ts";
 
 /**
  * Render a `WireManifest` as a `manifest.ts` source file.
@@ -130,6 +131,7 @@ function printValue(value: unknown, indent: number): string {
   if (typeof value === "string") return JSON.stringify(value);
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (isLuaFileRef(value)) return `luaFile(${JSON.stringify(value.path)})`;
+  if (isFileRef(value)) return `file(${JSON.stringify(value.path)})`;
   if (Array.isArray(value)) return printArray(value, indent);
   if (typeof value === "object") return printObject(value as Record<string, unknown>, indent);
   return JSON.stringify(value);
@@ -155,4 +157,65 @@ function printObject(obj: Record<string, unknown>, indent: number): string {
 const SAFE_KEY = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 function formatKey(k: string): string {
   return SAFE_KEY.test(k) ? k : JSON.stringify(k);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Custom-app printer. Materialises template / script / serverApi to
+// disk and emits a `defineCustomApp({...})` source file with `file()` /
+// `luaFile()` references. Used by `cococo init --type app` and by
+// `cococo pull --type app`.
+// ──────────────────────────────────────────────────────────────────────
+
+export type AppPrintInput = {
+  handle: string;
+  name: string;
+  kind: CustomAppKind;
+  icon?: string;
+  /** Relative path the printed manifest will reference for template. */
+  templatePath: string;
+  scriptPath: string;
+  /** Set only when serverApi exists — drives whether luaFile() is imported. */
+  serverApiPath?: string;
+  /** JSON-encoded; will be `JSON.parse`d and emitted as a literal. */
+  dataContainerSpec?: string;
+};
+
+export function printAppManifestTs(input: AppPrintInput): string {
+  const usesLuaFile = input.serverApiPath !== undefined;
+  const importLine = usesLuaFile
+    ? `import { defineCustomApp, file, luaFile } from "@wearecococo/dev-cli/define";`
+    : `import { defineCustomApp, file } from "@wearecococo/dev-cli/define";`;
+
+  const body: Record<string, unknown> = {
+    handle: input.handle,
+    name: input.name,
+    kind: input.kind,
+  };
+  if (input.icon) body.icon = input.icon;
+  body.engineVersion = 2;
+  body.template = fileRef(input.templatePath);
+  body.script = fileRef(input.scriptPath);
+  if (input.serverApiPath) body.serverApi = luaFileRef(input.serverApiPath);
+  if (input.dataContainerSpec) {
+    try {
+      body.dataContainerSpec = JSON.parse(input.dataContainerSpec);
+    } catch {
+      // Malformed JSON shouldn't be printed as a literal — drop it,
+      // and let the next push fail loudly with a server-side error
+      // rather than silently shipping junk into the wire payload.
+    }
+  }
+
+  return `${importLine}\n\nexport default defineCustomApp(${printObject(body, 0)});\n`;
+}
+
+const FILE_REF = Symbol("fileRef");
+type FileRef = { [FILE_REF]: true; path: string };
+
+function fileRef(path: string): FileRef {
+  return { [FILE_REF]: true, path: `./${path}` };
+}
+
+function isFileRef(x: unknown): x is FileRef {
+  return typeof x === "object" && x !== null && (x as FileRef)[FILE_REF] === true;
 }

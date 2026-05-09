@@ -16,11 +16,17 @@ export type IntegrationFolder = {
   posixRelative: (abs: string) => string;
 };
 
+export const INTEGRATIONS_DIR = "integrations";
+export const CUSTOM_APPS_DIR = "custom_apps";
+
 /**
- * Resolve a folder argument from the user's cwd to an integration folder.
- * - Bare name `foo`        → ./integrations/foo
- * - Path containing manifest.yaml → use as-is
- * - Empty arg              → cwd if it has manifest.yaml
+ * Resolve a folder argument from the user's cwd to a manifest folder.
+ *
+ * Bare names (no separators) get tried under both first-class
+ * directories — `integrations/<arg>` and `custom_apps/<arg>` — so the
+ * user can type `cococo push job-board` or `cococo push my-erp` without
+ * spelling out which kind of thing it is. Path-shaped args (`./...`,
+ * `custom_apps/job-board`) are taken verbatim.
  */
 export function resolveIntegrationFolder(arg: string | undefined): IntegrationFolder {
   const cwd = process.cwd();
@@ -31,7 +37,8 @@ export function resolveIntegrationFolder(arg: string | undefined): IntegrationFo
   } else if (arg.includes("/") || arg.startsWith(".") || arg.startsWith("~")) {
     candidates.push(resolve(cwd, arg));
   } else {
-    candidates.push(resolve(cwd, "integrations", arg));
+    candidates.push(resolve(cwd, INTEGRATIONS_DIR, arg));
+    candidates.push(resolve(cwd, CUSTOM_APPS_DIR, arg));
     candidates.push(resolve(cwd, arg));
   }
 

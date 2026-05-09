@@ -26,7 +26,22 @@ export type LuaCheckOrigin =
   | { kind: "manifest"; field: string; manifestPath: string };
 
 /**
- * Build the full list of `LuaCheck`s for an integration folder.
+ * Build the full list of `LuaCheck`s for a folder. Dispatches on the
+ * loaded manifest's kind — integrations and custom apps have different
+ * source layouts and roles, but share the same `LuaCheck` shape so the
+ * lint pipeline downstream is uniform.
+ */
+export function collectLuaChecks(args: {
+  loaded: LoadedManifest;
+  folderPath: string;
+  walkedFiles: ReadonlyMap<string, string>;
+}): LuaCheck[] {
+  if (args.loaded.kind === "app") return collectAppLuaChecks(args);
+  return collectIntegrationLuaChecks(args);
+}
+
+/**
+ * Integration checks:
  *
  *  1. Every `.lua` file under the folder yields a check. Role is
  *     `CUSTOM_APP` for anything under `app/`, `INTEGRATION` everywhere
@@ -38,15 +53,15 @@ export type LuaCheckOrigin =
  *     `injectManifestSources` populates them later from the same
  *     meta-dir files we already walked), so step 2 is a no-op.
  */
-export function collectLuaChecks(args: {
+function collectIntegrationLuaChecks(args: {
   loaded: LoadedManifest;
   folderPath: string;
   walkedFiles: ReadonlyMap<string, string>;
 }): LuaCheck[] {
   const { loaded, folderPath, walkedFiles } = args;
+  if (loaded.kind !== "integration") return [];
   const checks: LuaCheck[] = [];
 
-  // Step 1 — file-based checks.
   for (const [relPath, absPath] of walkedFiles) {
     if (!relPath.endsWith(".lua")) continue;
     const source = readFileSync(absPath, "utf8");
@@ -58,7 +73,6 @@ export function collectLuaChecks(args: {
     });
   }
 
-  // Step 2 — TS tag-based checks.
   if (loaded.format === "ts") {
     const manifestPath = join(folderPath, MANIFEST_TS_FILENAME);
     const m = loaded.manifest as Record<string, unknown>;
@@ -73,6 +87,48 @@ export function collectLuaChecks(args: {
         origin: { kind: "manifest", field: path, manifestPath },
       });
     }
+  }
+
+  return checks;
+}
+
+/**
+ * Custom-app checks: every walked `.lua` file runs under `CUSTOM_APP`,
+ * plus a manifest-origin check if `serverApi` was inlined as a
+ * `lua\`...\`` template literal (file-backed `serverApi` is already
+ * covered by walking `server.lua`).
+ */
+function collectAppLuaChecks(args: {
+  loaded: LoadedManifest;
+  folderPath: string;
+  walkedFiles: ReadonlyMap<string, string>;
+}): LuaCheck[] {
+  const { loaded, folderPath, walkedFiles } = args;
+  if (loaded.kind !== "app") return [];
+  const checks: LuaCheck[] = [];
+
+  for (const [relPath, absPath] of walkedFiles) {
+    if (!relPath.endsWith(".lua")) continue;
+    const source = readFileSync(absPath, "utf8");
+    checks.push({
+      source,
+      role: "CUSTOM_APP",
+      scriptName: relPath,
+      origin: { kind: "file", relativePath: relPath, absPath },
+    });
+  }
+
+  if (loaded.serverApiOrigin?.kind === "tag" && loaded.app.server_api) {
+    checks.push({
+      source: loaded.app.server_api,
+      role: "CUSTOM_APP",
+      scriptName: "manifest.ts:serverApi",
+      origin: {
+        kind: "manifest",
+        field: "serverApi",
+        manifestPath: join(folderPath, MANIFEST_TS_FILENAME),
+      },
+    });
   }
 
   return checks;

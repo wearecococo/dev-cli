@@ -1,13 +1,13 @@
 import { createClient } from "../graphql/client.ts";
 import { validateDraft } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
-import { findDefinition, loadLocal } from "./_shared.ts";
+import { findDefinition, loadLocalIntegration } from "./_shared.ts";
 
 export async function runValidate(
   folderArg: string | undefined,
   overrides: ConfigOverrides,
 ): Promise<void> {
-  const { manifest } = await loadLocal(folderArg);
+  const { manifest } = await loadLocalIntegration(folderArg);
   const client = createClient(loadConfig(overrides));
 
   const def = await findDefinition(client, manifest.id, manifest.version);

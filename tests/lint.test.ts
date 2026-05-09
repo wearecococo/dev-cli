@@ -4,7 +4,6 @@ import {
   roleForPath,
   scriptNameForFilePath,
 } from "../src/lua-checks.ts";
-import type { LoadedManifest } from "../src/loader.ts";
 
 describe("roleForPath", () => {
   test("app/** runs in CUSTOM_APP role", () => {
@@ -40,32 +39,8 @@ describe("scriptNameForFilePath", () => {
   });
 });
 
-describe("collectLuaChecks", () => {
-  function loaded(
-    overrides: Partial<LoadedManifest> = {},
-  ): LoadedManifest {
-    return {
-      manifest: {
-        id: "com.acme.foo",
-        version: "0.1.0",
-        engine_version: 2,
-      } as any,
-      format: "yaml",
-      consumed: new Set(),
-      manifestSourceOrigins: new Map(),
-      ...overrides,
-    };
-  }
-
-  test("YAML: emits one check per .lua file with role + scriptName", () => {
-    // No fs reads happen in tests because we point at /dev/null —
-    // wait, we do read the files. Use real files via tmpdir.
-    // Actually collectLuaChecks reads via readFileSync — we need
-    // real files. Skip this assertion — covered by the real-file
-    // tests below.
-    expect(true).toBe(true);
-  });
-});
+// (Real-file collectLuaChecks tests live in the suite below; the unit
+// helpers above stand on their own.)
 
 import {
   mkdirSync,
@@ -111,6 +86,7 @@ describe("collectLuaChecks (with real files)", () => {
     try {
       const checks = collectLuaChecks({
         loaded: {
+          kind: "integration",
           manifest: { id: "x", version: "1", engine_version: 2 } as any,
           format: "yaml",
           consumed: new Set(),
@@ -151,6 +127,7 @@ describe("collectLuaChecks (with real files)", () => {
       ]);
       const checks = collectLuaChecks({
         loaded: {
+          kind: "integration",
           manifest: {
             id: "x",
             version: "1",
@@ -200,6 +177,7 @@ describe("collectLuaChecks (with real files)", () => {
     try {
       const checks = collectLuaChecks({
         loaded: {
+          kind: "integration",
           manifest: { id: "x", version: "1", engine_version: 2 } as any,
           format: "yaml",
           consumed: new Set(),

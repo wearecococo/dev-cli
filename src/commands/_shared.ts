@@ -1,32 +1,43 @@
-import { loadManifest, type ManifestFormat } from "../loader.ts";
+import {
+  expectIntegration,
+  loadManifest,
+  type LoadedManifest,
+  type LoadedIntegration as LoadedIntegrationCore,
+} from "../loader.ts";
 import { resolveIntegrationFolder, type IntegrationFolder } from "../project.ts";
 import {
   listDefinitions,
   type IntegrationDefinition,
 } from "../graphql/operations.ts";
 import type { GraphQLClient } from "../graphql/client.ts";
-import type { WireManifest } from "../manifest.ts";
 
-export type LoadedIntegration = {
+export type LoadedAtFolder = {
   folder: IntegrationFolder;
-  manifest: WireManifest;
-  format: ManifestFormat;
-  /**
-   * Absolute paths consumed by `luaFile()` references on a TS manifest —
-   * push must NOT also upload these as bundle files. Empty for YAML.
-   */
-  consumed: Set<string>;
+  loaded: LoadedManifest;
 };
 
-export async function loadLocal(folderArg: string | undefined): Promise<LoadedIntegration> {
+/**
+ * Resolve a folder argument and load whatever manifest sits there. The
+ * returned `loaded` is a discriminated union — caller narrows to either
+ * an integration or a custom app via `expectIntegration` /
+ * `expectIntegrationAt` / `expectAppAt`.
+ */
+export async function loadLocal(folderArg: string | undefined): Promise<LoadedAtFolder> {
   const folder = resolveIntegrationFolder(folderArg);
   const loaded = await loadManifest(folder.path);
-  return {
-    folder,
-    manifest: loaded.manifest,
-    format: loaded.format,
-    consumed: loaded.consumed,
-  };
+  return { folder, loaded };
+}
+
+/**
+ * Convenience for commands that only handle integrations: load + narrow
+ * + flatten into one call. Throws with a clear error if the folder
+ * contains a custom app.
+ */
+export async function loadLocalIntegration(
+  folderArg: string | undefined,
+): Promise<{ folder: IntegrationFolder } & LoadedIntegrationCore> {
+  const { folder, loaded } = await loadLocal(folderArg);
+  return { folder, ...expectIntegration(loaded) };
 }
 
 export async function findDefinition(

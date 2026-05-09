@@ -1,16 +1,27 @@
 import { createClient } from "../graphql/client.ts";
-import { listDefinitions } from "../graphql/operations.ts";
+import { listCustomApps, listDefinitions } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 
 export async function runList(overrides: ConfigOverrides): Promise<void> {
   const client = createClient(loadConfig(overrides));
 
-  const [drafts, active, deprecated] = await Promise.all([
+  const [drafts, active, deprecated, apps] = await Promise.all([
     listDefinitions(client, { status: "DRAFT" }),
     listDefinitions(client, { status: "ACTIVE" }),
     listDefinitions(client, { status: "DEPRECATED" }),
+    listCustomApps(client),
   ]);
 
+  printIntegrations({ drafts, active, deprecated });
+  console.log("");
+  printCustomApps(apps);
+}
+
+function printIntegrations(input: {
+  drafts: Array<{ integrationId: string; version: string; engineVersion: number }>;
+  active: Array<{ integrationId: string; version: string; engineVersion: number }>;
+  deprecated: Array<{ integrationId: string; version: string; engineVersion: number }>;
+}): void {
   const grouped = new Map<
     string,
     { drafts: string[]; active: string[]; deprecated: string[] }
@@ -24,13 +35,13 @@ export async function runList(overrides: ConfigOverrides): Promise<void> {
     return row;
   };
   const tag = (version: string, engineVersion: number) => `${version} (v${engineVersion})`;
-  for (const d of drafts) ensure(d.integrationId).drafts.push(tag(d.version, d.engineVersion));
-  for (const d of active) ensure(d.integrationId).active.push(tag(d.version, d.engineVersion));
-  for (const d of deprecated)
+  for (const d of input.drafts) ensure(d.integrationId).drafts.push(tag(d.version, d.engineVersion));
+  for (const d of input.active) ensure(d.integrationId).active.push(tag(d.version, d.engineVersion));
+  for (const d of input.deprecated)
     ensure(d.integrationId).deprecated.push(tag(d.version, d.engineVersion));
 
   if (grouped.size === 0) {
-    console.log("No integration definitions found.");
+    console.log("Integrations: none.");
     return;
   }
 
@@ -50,6 +61,41 @@ export async function runList(overrides: ConfigOverrides): Promise<void> {
         row.active.join(",") || "-",
         colWidth,
       )}  ${row.deprecated.join(",") || "-"}`,
+    );
+  }
+}
+
+function printCustomApps(
+  apps: Array<{
+    handle: string;
+    name: string;
+    kind: string;
+    publishedVersion?: number | null;
+    engineVersion: number;
+  }>,
+): void {
+  if (apps.length === 0) {
+    console.log("Custom apps: none.");
+    return;
+  }
+
+  const sorted = apps.slice().sort((a, b) => a.handle.localeCompare(b.handle));
+  const handleWidth = Math.max(14, ...sorted.map((a) => a.handle.length));
+  const nameWidth = Math.max(10, ...sorted.map((a) => a.name.length));
+  const header = `${pad("CUSTOM APP", handleWidth)}  ${pad(
+    "NAME",
+    nameWidth,
+  )}  ${pad("KIND", 10)}  PUBLISHED`;
+  console.log(header);
+  console.log("-".repeat(header.length));
+  for (const app of sorted) {
+    const published =
+      app.publishedVersion != null ? `v${app.publishedVersion}` : "(none)";
+    console.log(
+      `${pad(app.handle, handleWidth)}  ${pad(app.name, nameWidth)}  ${pad(
+        app.kind,
+        10,
+      )}  ${published}`,
     );
   }
 }

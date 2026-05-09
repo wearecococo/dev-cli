@@ -1,13 +1,16 @@
 import { readFileSync } from "node:fs";
-import { createClient } from "../graphql/client.ts";
+import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   createDraft,
+  getCustomAppByHandle,
   getDefinition,
   updateDraftFile,
   updateDraftManifest,
+  upsertCustomApp,
+  type CustomAppState,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
-import { walkIntegrationFiles } from "../project.ts";
+import { makeFolder, walkIntegrationFiles } from "../project.ts";
 import {
   manifestEngineVersion,
   manifestFromGraphql,
@@ -21,6 +24,10 @@ import {
   injectManifestSources,
   partitionFiles,
 } from "../sources.ts";
+import type {
+  LoadedCustomApp,
+  LoadedIntegration,
+} from "../loader.ts";
 import { findDefinition, loadLocal } from "./_shared.ts";
 import { reportLintFindings, runLintFindings } from "./lint.ts";
 
@@ -34,8 +41,57 @@ export async function runPush(
   opts: PushOptions,
   overrides: ConfigOverrides,
 ): Promise<void> {
-  const { folder, manifest, format, consumed } = await loadLocal(folderArg);
+  const { folder, loaded } = await loadLocal(folderArg);
   const client = createClient(loadConfig(overrides));
+
+  // Pre-push Lua validation runs the same way regardless of kind —
+  // collectLuaChecks already dispatches by kind and assigns the right
+  // role per chunk.
+  await runPrePushLint(folder.path, opts, overrides);
+
+  if (loaded.kind === "app") {
+    await pushCustomApp(client, folder.path, loaded);
+    return;
+  }
+  await pushIntegration(client, folder.path, loaded);
+}
+
+async function runPrePushLint(
+  folderPath: string,
+  opts: PushOptions,
+  overrides: ConfigOverrides,
+): Promise<void> {
+  const findings = await runLintFindings(folderPath, { strict: opts.strict ?? false }, overrides);
+  if (findings.length === 0) return;
+  const errorCount = findings.reduce(
+    (n, f) => n + f.diagnostics.filter((d) => d.severity === "ERROR").length,
+    0,
+  );
+  const warningCount = findings.reduce(
+    (n, f) => n + f.diagnostics.filter((d) => d.severity === "WARNING").length,
+    0,
+  );
+  const fatal = errorCount > 0 || (opts.strict && warningCount > 0);
+  if (fatal) {
+    reportLintFindings(findings);
+    throw new Error(
+      `Lua validation failed (${errorCount} error(s), ${warningCount} warning(s)). ` +
+        `Fix and re-run push.`,
+    );
+  }
+  reportLintFindings(findings);
+  console.error(
+    `\n${warningCount} warning(s) — non-fatal. Run with --strict to fail the push on warnings.`,
+  );
+}
+
+async function pushIntegration(
+  client: GraphQLClient,
+  folderPath: string,
+  loaded: LoadedIntegration,
+): Promise<void> {
+  const { manifest, format, consumed } = loaded;
+  const folder = makeFolder(folderPath);
 
   const local = walkIntegrationFiles(folder);
   // Always reserve the materialisation directories from bundle uploads.
@@ -50,36 +106,6 @@ export async function runPush(
     for (const [path, abs] of [...localBundle]) {
       if (consumed.has(abs)) localBundle.delete(path);
     }
-  }
-
-  // Pre-push Lua validation. Catches not just file-based scripts but
-  // every inline `lua\`...\`` snippet on a TS manifest, role-aware
-  // (CUSTOM_APP for app/**, INTEGRATION elsewhere). Strict mode upgrades
-  // warnings to failures.
-  const findings = await runLintFindings(folder.path, { strict: opts.strict ?? false }, overrides);
-  if (findings.length > 0) {
-    const errorCount = findings.reduce(
-      (n, f) => n + f.diagnostics.filter((d) => d.severity === "ERROR").length,
-      0,
-    );
-    const warningCount = findings.reduce(
-      (n, f) => n + f.diagnostics.filter((d) => d.severity === "WARNING").length,
-      0,
-    );
-    const fatal = errorCount > 0 || (opts.strict && warningCount > 0);
-    if (fatal) {
-      reportLintFindings(findings);
-      throw new Error(
-        `Lua validation failed (${errorCount} error(s), ${warningCount} warning(s)). ` +
-          `Fix and re-run push.`,
-      );
-    }
-    // Non-fatal: still surface warnings so the user sees them, but
-    // continue with the push.
-    reportLintFindings(findings);
-    console.error(
-      `\n${warningCount} warning(s) — non-fatal. Run with --strict to fail the push on warnings.`,
-    );
   }
 
   const manifestForWire = buildWireManifest(manifest, format, localSources);
@@ -175,4 +201,47 @@ function listChanges(d: FileDiff): void {
   for (const p of d.added) console.log(`    + ${p}`);
   for (const p of d.changed) console.log(`    ~ ${p}`);
   for (const p of d.deleted) console.log(`    - ${p}`);
+}
+
+async function pushCustomApp(
+  client: GraphQLClient,
+  folderPath: string,
+  loaded: LoadedCustomApp,
+): Promise<void> {
+  const { app } = loaded;
+
+  // Custom apps don't use semver / DRAFT-ACTIVE — there's a single
+  // working copy keyed by handle. Fetch the existing one (if any) so
+  // upsert can carry the id forward; otherwise upsert creates a fresh
+  // app on the platform.
+  const existing = await getCustomAppByHandle(client, app.handle);
+
+  const result = await upsertCustomApp(client, {
+    id: existing?.id,
+    name: app.name,
+    handle: app.handle,
+    kind: app.kind,
+    icon: app.icon,
+    dataContainerSpec: app.data_container_spec,
+    config: {
+      template: app.template,
+      script: app.script,
+      ...(app.server_api !== undefined ? { serverApi: app.server_api } : {}),
+    },
+  });
+
+  reportCustomAppPush(result, folderPath, existing);
+}
+
+function reportCustomAppPush(
+  result: CustomAppState,
+  folderPath: string,
+  existing: CustomAppState | undefined,
+): void {
+  const verb = existing ? "Updated" : "Created";
+  const published = result.publishedVersion != null
+    ? ` (published v${result.publishedVersion})`
+    : ` (no published version yet — run 'cococo publish' to snapshot + publish)`;
+  console.log(`${verb} custom app ${result.handle} → ${result.id}${published}`);
+  console.log(`  folder: ${folderPath}`);
 }

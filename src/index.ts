@@ -27,28 +27,49 @@ const apiOpts = () => {
 };
 
 program
-  .command("init <integrationId>")
+  .command("init <idOrHandle>")
   .description(
-    "Scaffold ./integrations/<short-name>/ with a starter manifest. Defaults to a TypeScript manifest at engineVersion 2.",
+    "Scaffold a new integration or custom app under integrations/<short-name>/ or " +
+      "custom_apps/<handle>/. Defaults to a TypeScript manifest at engineVersion 2.",
   )
-  .option("-v, --version <version>", "Initial semantic version", "0.1.0")
+  .option(
+    "-t, --type <integration|app>",
+    "Kind of thing to scaffold",
+    "integration",
+  )
+  .option("-v, --version <version>", "Initial semantic version (integrations only)", "0.1.0")
   .option(
     "-e, --engine-version <n>",
-    "Integration engine version to scaffold (1 or 2)",
+    "Integration engine version to scaffold (1 or 2; integrations only)",
     "2",
   )
-  .option("-f, --format <ts|yaml>", "Manifest format", "ts")
+  .option("-f, --format <ts|yaml>", "Manifest format (integrations only)", "ts")
+  .option(
+    "-k, --app-kind <kind>",
+    "Custom-app kind (PAGE | DASHBOARD | KIOSK | JOB_VIEW; apps only)",
+    "PAGE",
+  )
   .action(
     async (
-      integrationId: string,
-      opts: { version: string; engineVersion: string; format: string },
+      idOrHandle: string,
+      opts: {
+        type: string;
+        version: string;
+        engineVersion: string;
+        format: string;
+        appKind: string;
+      },
     ) => {
+      const type = parseType(opts.type);
       const engineVersion = parseEngineVersion(opts.engineVersion);
       const format = parseFormat(opts.format);
-      await runInit(integrationId, {
+      const appKind = type === "app" ? parseAppKind(opts.appKind) : undefined;
+      await runInit(idOrHandle, {
         version: opts.version,
         engineVersion,
         format,
+        type,
+        appKind,
       });
     },
   );
@@ -62,6 +83,18 @@ function parseEngineVersion(raw: string): 1 | 2 {
 function parseFormat(raw: string): "ts" | "yaml" {
   if (raw === "ts" || raw === "yaml") return raw;
   throw new Error(`--format must be 'ts' or 'yaml' (got ${raw}).`);
+}
+
+function parseType(raw: string): "integration" | "app" {
+  if (raw === "integration" || raw === "app") return raw;
+  throw new Error(`--type must be 'integration' or 'app' (got ${raw}).`);
+}
+
+function parseAppKind(raw: string): "PAGE" | "DASHBOARD" | "KIOSK" | "JOB_VIEW" {
+  if (raw === "PAGE" || raw === "DASHBOARD" || raw === "KIOSK" || raw === "JOB_VIEW") return raw;
+  throw new Error(
+    `--app-kind must be PAGE | DASHBOARD | KIOSK | JOB_VIEW (got ${raw}).`,
+  );
 }
 
 program
@@ -113,20 +146,25 @@ program
   });
 
 program
-  .command("pull <integrationId>")
-  .description("Materialize a remote draft into ./integrations/<short-name>/.")
-  .option("-v, --version <version>", "Specific draft version to pull (defaults to highest)")
+  .command("pull <idOrHandle>")
+  .description(
+    "Materialize a remote integration draft into integrations/<short-name>/, " +
+      "or a remote custom app's working copy into custom_apps/<handle>/.",
+  )
+  .option("-t, --type <integration|app>", "Kind of thing to pull", "integration")
+  .option("-v, --version <version>", "Specific draft version to pull (integrations only)")
   .option("-f, --force", "Overwrite if the target folder already exists", false)
-  .option("--format <ts|yaml>", "Manifest format to emit", "ts")
+  .option("--format <ts|yaml>", "Manifest format to emit (integrations only)", "ts")
   .action(
     async (
-      integrationId: string,
-      opts: { version?: string; force: boolean; format: string },
+      idOrHandle: string,
+      opts: { type: string; version?: string; force: boolean; format: string },
     ) => {
+      const type = parseType(opts.type);
       const format = parseFormat(opts.format);
       await runPull(
-        integrationId,
-        { version: opts.version, force: opts.force, format },
+        idOrHandle,
+        { version: opts.version, force: opts.force, format, type },
         apiOpts(),
       );
     },

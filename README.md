@@ -1,318 +1,382 @@
 # @wearecococo/dev-cli
 
-A small CLI for authoring **integration builder** integrations (script_actor
-runtime) against the cococo platform's GraphQL API. Keep your integrations as
-plain folders on disk — a `manifest.ts` (or legacy `manifest.yaml`) plus the
-Lua handlers it references — and use this tool to push/validate/publish
-drafts.
+Author cococo platform **integrations** and **custom apps** locally —
+TypeScript manifests, real Lua files, server-side validation, and a tight
+push / lint / publish loop.
 
-The canonical manifest format is **TypeScript**:
+## Contents
+
+- [Quick start](#quick-start)
+- [Install](#install)
+- [Configuration](#configuration)
+- [Authoring an integration](#authoring-an-integration)
+- [Authoring a custom app](#authoring-a-custom-app)
+- [Daily workflow](#daily-workflow)
+- [Migrating v1 integrations](#migrating-v1-integrations)
+- [Reference](#reference)
+- [Notes & limitations](#notes--limitations)
+- [Hacking on the CLI itself](#hacking-on-the-cli-itself)
+
+## Quick start
+
+In any Bun project (has a `package.json`):
+
+```sh
+# Install + configure
+bun add -d "@wearecococo/dev-cli@github:wearecococo/dev-cli#main"
+export COCOCO_ENDPOINT=https://your-tenant.example.com/graphql
+export COCOCO_TOKEN=your-bearer-token
+
+# Author an integration
+bunx cococo init com.acme.orders
+bunx cococo push orders
+bunx cococo publish orders
+
+# …or a custom app
+bunx cococo init job-board --type app
+bunx cococo push job-board
+bunx cococo publish job-board
+```
+
+That's the whole loop: edit files, push, publish.
+
+## Install
+
+The CLI is consumed straight from GitHub. Pin to a tag or commit instead
+of `#main` for reproducibility:
+
+```json
+// package.json
+{
+  "devDependencies": {
+    "@wearecococo/dev-cli": "github:wearecococo/dev-cli#v0.1.0"
+  }
+}
+```
+
+`bun install` pulls `commander` and `yaml` along with it. Run via
+`bunx cococo …` (or `node_modules/.bin/cococo`).
+
+For one-shot use without installing:
+
+```sh
+bunx github:wearecococo/dev-cli cococo init com.acme.demo
+```
+
+## Configuration
+
+Two env vars (Bun loads `.env` automatically):
+
+```sh
+COCOCO_ENDPOINT=https://your-tenant.example.com/graphql
+COCOCO_TOKEN=your-bearer-token
+```
+
+Override per-invocation with `--endpoint` / `--token`.
+
+## Authoring an integration
+
+`cococo init <reverse-domain-id>` scaffolds a folder under
+`integrations/<short-name>/`:
+
+```
+integrations/orders/
+├── manifest.ts
+└── handlers/
+    └── timers/
+        └── heartbeat.lua
+```
+
+The `manifest.ts` is just TypeScript — you get completion and
+diagnostics on every field as you type:
 
 ```ts
-// integrations/orders/manifest.ts
 import { defineIntegration, lua, luaFile } from "@wearecococo/dev-cli/define";
 
 export default defineIntegration({
   id: "com.acme.orders",
   version: "0.1.0",
-  engineVersion: 2,
   sdkVersion: "1.0",
   runtimeMode: "script_actor",
   resources: [],
   permissions: [],
 
-  // Inline one-liners use the `lua` tag (LuaSource-branded, dedented).
+  // Short Lua snippets inline:
   initSource: lua`
     local config = ...
     ctx.log.info("starting against " .. config.api_url)
   `,
 
-  // Anything longer lives in its own .lua file, referenced via luaFile().
+  // Anything longer in its own .lua file (path is relative to manifest.ts):
   timers: [
     { name: "tick", every: "1m", source: luaFile("./handlers/timers/tick.lua") },
   ],
-
   subscriptions: [
-    {
-      topic: "jobs.created",
-      source: luaFile("./handlers/subscriptions/jobs.created.lua"),
-    },
+    { topic: "jobs.created", source: luaFile("./handlers/subscriptions/jobs.created.lua") },
   ],
 
+  // Reusable helpers loaded at runtime via `ctx.script.load("name")`:
   libraries: {
     http_helpers: luaFile("./libraries/http_helpers.lua"),
   },
 });
 ```
 
-You get TypeScript completion + diagnostics for the manifest at edit time,
-and the platform validation runs as a backstop. Both engine versions of the
-integration runtime are supported:
+`luaFile()` paths can point anywhere in the folder, but the scaffold and
+`cococo pull` use these conventions:
 
-- **v2** (default) — handler bodies live as separate Lua files referenced via
-  `luaFile()` (or short ones inline via `lua\`...\``). Optional
-  `initSource` / `shutdownSource` / `upgradeSource` lifecycle hooks plus a
-  `libraries` map loaded via `ctx.script.load(name)`. No entry script.
-- **v1** (legacy, still supported) — `entryScript` populates a global
-  `exports` table; the runtime dispatches via `exports.<hook>` lookup.
+| Manifest field            | On-disk file                            |
+|---------------------------|-----------------------------------------|
+| `initSource`              | `lifecycle/init.lua`                    |
+| `shutdownSource`          | `lifecycle/shutdown.lua`                |
+| `upgradeSource`           | `lifecycle/upgrade.lua`                 |
+| `timers[*].source`        | `handlers/timers/<name>.lua`            |
+| `subscriptions[*].source` | `handlers/subscriptions/<topic>.lua`    |
+| `libraries.<name>`        | `libraries/<name>.lua`                  |
 
-`manifest.yaml` continues to work for folders that haven't migrated, and you
-can opt into it explicitly with `--format yaml` on `init` and `pull`. See
-"YAML manifests" below for the snake_case shape.
+Files under `handlers/`, `lifecycle/`, and `libraries/` ship inside the
+manifest payload; they're not separate bundle uploads. Anything else you
+add in the folder (`scripts/`, `app/`, `workflows/`, `config_schema.json`,
+`policy.yaml`) travels as a bundle file.
 
-This is a stop-gap for developer workflow while the full Terraform provider is
-built. It only manages **drafts**; instances, runs, and config live elsewhere.
-
-## Install
-
-The CLI isn't on npm — it's consumed straight from GitHub. Bun resolves
-`github:` specs natively; the only prerequisite for end users is having Bun
-installed.
-
-> Pin to a tag or commit (`#v0.1.0`, `#abc1234`) instead of `#main` for
-> reproducible installs.
-
-### Per-project (recommended)
-
-Add to your integrations monorepo's `package.json`:
-
-```json
-{
-  "devDependencies": {
-    "@wearecococo/dev-cli": "github:wearecococo/dev-cli#main"
-  }
-}
-```
-
-Then:
+Push it:
 
 ```sh
-bun install
-bunx cococo --help              # picks up node_modules/.bin/cococo
+bunx cococo push orders
 ```
 
-`bun install` will also pull `commander` and `yaml` transitively — no extra
-dependencies for the consuming repo.
+## Authoring a custom app
 
-### One-shot (no install)
+Custom apps live under `custom_apps/<handle>/` peer to `integrations/`,
+with the same TypeScript-first shape but only three "source slots": a
+Vue template, a client script, and an optional Lua RPC server.
 
 ```sh
-bunx github:wearecococo/dev-cli cococo init com.acme.my-integration
+bunx cococo init job-board --type app
 ```
 
-Useful for trying the CLI without committing to a `package.json` entry.
+Scaffolds:
 
-### Local development of the CLI itself
+```
+custom_apps/job-board/
+├── manifest.ts
+├── template.vue       # Vue HTML rendered in the iframe
+├── script.js          # client-side JS
+└── server.lua         # optional Lua RPC handlers
+```
 
-If you're hacking on this repo:
+```ts
+import { defineCustomApp, file, luaFile } from "@wearecococo/dev-cli/define";
+
+export default defineCustomApp({
+  handle: "job-board",
+  name: "Job Board",
+  kind: "PAGE",                            // PAGE | DASHBOARD | KIOSK | JOB_VIEW
+  template: file("./template.vue"),
+  script: file("./script.js"),
+  serverApi: luaFile("./server.lua"),      // omit if no RPC handlers
+});
+```
+
+`file()` reads any text file (HTML, JS, JSON); `luaFile()` is for Lua
+specifically — `cococo lint` validates it under the `CUSTOM_APP` role.
+
+Custom apps don't use semver. The platform stores a single working copy
+keyed by handle, plus immutable version snapshots:
 
 ```sh
-bun install
-bun link             # exposes `cococo` on PATH using src/index.ts directly
-cococo --help
+bunx cococo push job-board       # upserts the working copy
+bunx cococo publish job-board    # snapshots + publishes in one step
+# → job-board: published v3 (cap_xyz)
 ```
 
-`bun unlink` to remove.
+## Daily workflow
 
-## Configuration
-
-The CLI reads two env vars (Bun loads `.env` automatically):
+These commands work the same way for both integrations and custom apps —
+they dispatch by inspecting the manifest in the folder. Pass a folder
+name (resolved under `integrations/` *or* `custom_apps/`), a path, or
+omit the arg from inside the folder.
 
 ```sh
-COCOCO_ENDPOINT=https://api.example.com/graphql
-COCOCO_TOKEN=your-bearer-token
+bunx cococo status orders               # diff local vs remote, read-only
+bunx cococo lint orders                 # validate every Lua chunk
+bunx cococo lint orders --strict        # warnings as errors (CI mode)
+bunx cococo push orders                 # mirror local → remote (runs lint first)
+bunx cococo publish orders              # validate + publish
+bunx cococo pull com.acme.orders        # download remote draft
+bunx cococo pull job-board --type app   # download custom-app working copy
+bunx cococo list                        # all integrations + apps on the server
 ```
 
-Both can be overridden per-invocation with `--endpoint` and `--token`.
+### Lua validation
 
-## Project layout
+`cococo lint` calls the platform's Lua validator on every chunk in your
+folder:
 
-The CLI is run from the root of *your* integrations monorepo. It expects:
+- **Files** — every `.lua` file walked.
+- **Inline snippets** — every `` lua`...` `` template literal on a TS
+  manifest.
+- **Role-aware** — `app/**` and the custom-app `server.lua` validate
+  under `CUSTOM_APP`; everything else under `INTEGRATION`. The role
+  determines which `ctx.*` APIs are visible.
+
+Diagnostics carry line, column, severity, and Luau error code:
+
+```
+handlers/timers/tick.lua:5:12        ERROR    unknown ctx.bogus.api  [LU0042]
+manifest.ts:initSource:3:5           WARNING  unused local "x"
+app/server.lua:8:1                   ERROR    ctx.integration not available in CUSTOM_APP role
+```
+
+`cococo push` runs the same pass first; `--strict` fails on warnings.
+
+## Migrating v1 integrations
+
+If you have an existing `manifest.yaml` + `scripts/main.lua` integration
+on `engineVersion: 1`, `cococo migrate` forks it into a v2 TypeScript
+sibling — Claude Code refactors the entry script into per-handler files:
+
+```sh
+bunx cococo migrate orders
+# → integrations/orders_v2/  (version 0.1.0 → 0.2.0)
+```
+
+What happens:
+
+1. **Fork** — copies bundle artefacts (config schema, policy, workflows,
+   `app/`, `scripts/<other>.lua` helpers) to `integrations/orders_v2/`,
+   omitting `manifest.yaml` and `scripts/main.lua`.
+2. **Skeleton** — writes a v2 `manifest.ts` with placeholder handler
+   files for each timer / subscription declared in the v1 manifest.
+3. **Refactor** — shells out to `claude -p` with a structured prompt;
+   Claude rewrites `scripts/main.lua` into per-handler files, lifts
+   shared helpers into `libraries/`, and adds `initSource` /
+   `shutdownSource` if the v1 script had them.
+4. **Lint** — validates the result via `cococo lint`.
+
+The original v1 folder is untouched. Review the diff in `_v2/`, then
+`rm -rf` the old folder and rename when you're happy. If `claude` isn't
+on PATH, you get the skeleton plus a self-contained prompt at
+`_v2/.cococo-migrate-prompt.txt` to run manually.
+
+## Reference
+
+### Project layout
 
 ```
 <your-repo>/
-└── integrations/
-    └── <name>/
-        ├── manifest.ts                (canonical) OR manifest.yaml (legacy)
-        ├── handlers/                  (v2 — Lua bodies referenced by luaFile)
-        │   ├── timers/<name>.lua
-        │   └── subscriptions/<topic>.lua
-        ├── lifecycle/                 (v2 — init/shutdown/upgrade hooks)
-        │   ├── init.lua
-        │   ├── shutdown.lua
-        │   └── upgrade.lua
-        ├── libraries/<name>.lua       (v2 — entries in the libraries map)
-        ├── scripts/
-        │   ├── main.lua               (v1 entry script)
-        │   └── ...                    (v2 helpers reachable via ctx.script.load)
-        ├── app/                       (optional — embedded custom app)
-        │   ├── index.html
-        │   ├── script.js
-        │   └── server.lua
-        ├── config_schema.json         (optional)
-        ├── policy.yaml                (optional)
-        └── workflows/*.yaml           (optional)
+├── integrations/
+│   └── <name>/                            # one folder per integration
+│       ├── manifest.ts                    # canonical
+│       ├── handlers/                      # luaFile() targets — manifest payload
+│       │   ├── timers/<name>.lua
+│       │   └── subscriptions/<topic>.lua
+│       ├── lifecycle/                     # luaFile() targets — manifest payload
+│       │   ├── init.lua
+│       │   ├── shutdown.lua
+│       │   └── upgrade.lua
+│       ├── libraries/<name>.lua           # luaFile() targets — manifest payload
+│       ├── scripts/<other>.lua            # bundle scripts (ctx.script.load helpers)
+│       ├── app/                           # optional embedded sub-app (bundle)
+│       ├── config_schema.json             # optional
+│       ├── policy.yaml                    # optional
+│       └── workflows/*.yaml               # optional
+└── custom_apps/
+    └── <handle>/                          # one folder per custom app
+        ├── manifest.ts
+        ├── template.vue
+        ├── script.js
+        └── server.lua                     # optional
 ```
 
-### v2 manifest source files
+### Commands
 
-In v2, the inline `source` strings on each timer/subscription, the
-`init_source`/`shutdown_source`/`upgrade_source` lifecycle hooks, and the
-`libraries` map are kept as ordinary `.lua` files on disk so you can edit
-them with syntax highlighting, run `cococo lint` on them, and get clean
-`git` diffs.
-
-| Manifest field            | On-disk convention                       |
-|---------------------------|------------------------------------------|
-| `initSource`              | `lifecycle/init.lua`                     |
-| `shutdownSource`          | `lifecycle/shutdown.lua`                 |
-| `upgradeSource`           | `lifecycle/upgrade.lua`                  |
-| `timers[i].source`        | `handlers/timers/<timer.name>.lua`       |
-| `subscriptions[i].source` | `handlers/subscriptions/<topic>.lua`     |
-| `libraries[name]`         | `libraries/<name>.lua`                   |
-
-How files are linked to manifest fields depends on the format:
-
-- **TS manifest** — references are explicit via `luaFile("./...")`. The path
-  can be anywhere in the integration folder; the conventions above are just
-  what `cococo init` and `cococo pull` use when they generate things.
-- **YAML manifest** — references are implicit by convention. Push looks up
-  `handlers/timers/<name>.lua` for each timer entry, etc. Stray files (no
-  matching manifest entry) cause push to refuse, and timer names /
-  subscription topics must be unique.
-
-In both formats, files under `handlers/`, `lifecycle/`, and `libraries/` are
-**never** uploaded as bundle files — the server's `IntegrationBundle` doesn't
-know about those paths. They only travel inside the manifest payload.
-
-### Embedded custom apps
-
-An integration can ship a custom app (Vue template + client script + optional
-Lua RPC handlers) by dropping files under `app/`:
-
-- `app/index.html` — Vue template rendered in the iframe.
-- `app/script.js` — client-side script.
-- `app/server.lua` — optional Lua RPC handlers, attached to a global
-  `exports` table the same way `scripts/main.lua` is.
-
-No manifest declaration is needed. `cococo push` uploads them as part of the
-draft bundle and `cococo pull` writes them back into `app/`.
-
-### YAML manifests (legacy / opt-out)
-
-`manifest.yaml` mirrors the platform's `IntegrationManifest` shape (snake_case
-on disk and on the wire). The CLI adds one local-only key — `engine_version`
-— so the folder round-trips between push and pull. A folder with both
-`manifest.ts` and `manifest.yaml` is rejected; pick one.
-
-**v2:**
-
-```yaml
-id: com.acme.my-integration
-version: 0.1.0
-engine_version: 2
-sdk_version: "1.0"
-runtime_mode: script_actor
-description: Optional human-readable summary.
-resources: []
-permissions: []
-subscriptions:
-  - topic: jobs.created
-timers:
-  - name: tick
-    every: 1m
-```
-
-…with the Lua bodies as separate files at the conventional paths
-(`handlers/timers/tick.lua` etc — see the table above).
-
-**v1:**
-
-```yaml
-id: com.acme.my-integration
-version: 0.1.0
-engine_version: 1
-sdk_version: "1.0"
-runtime_mode: script_actor
-entry_script: main.lua
-description: Optional human-readable summary.
-resources: []
-permissions: []
-subscriptions:
-  - topic: jobs.created
-timers:
-  - name: tick
-    every: 1m
-```
-
-Use `cococo init <integrationId> --format yaml` for a YAML scaffold, and
-`--engine-version 1` for the v1 entry-script shape.
-
-## Commands
-
-All commands accept either a folder name (resolved against `./integrations/`),
-a path, or no argument (uses cwd if it has a `manifest.ts` or `manifest.yaml`).
-
-| Command | What it does |
+| Command | Purpose |
 |---|---|
-| `cococo init <integrationId> [-v 0.1.0] [-e 2] [--format ts\|yaml]` | Scaffold `./integrations/<short-name>/` with a minimal v2 `manifest.ts` and a starter `handlers/timers/heartbeat.lua`. `-e 1` switches to the v1 entry-script + `scripts/main.lua` shape; `--format yaml` emits a YAML manifest. No network call. |
-| `cococo list` | List all integration definitions on the server, grouped by `integrationId`, showing draft + active versions. |
-| `cococo status [folder]` | Show the diff between local files and the matching remote draft. Read-only. |
-| `cococo push [folder] [--strict]` | Mirror local → remote draft. Creates the draft if needed. Uploads added/changed files and **deletes remote files that no longer exist locally**. Refuses if the version is already `ACTIVE` or `DEPRECATED`. Runs the same Lua validation pass as `cococo lint` first; `--strict` fails the push on warnings. |
-| `cococo lint [folder] [--strict]` | Validate every Lua chunk in the folder via the server. Covers `.lua` files (scripts, app, handlers, lifecycle, libraries) **and** inline `` lua`...` `` snippets on a TS manifest. Role-aware: `app/**` runs under `CUSTOM_APP`, everything else under `INTEGRATION`. Diagnostics include line/column and severity (`ERROR` / `WARNING`). Warnings are reported but non-fatal unless `--strict`. |
-| `cococo validate [folder]` | Run server validation against the remote draft. Exits non-zero on errors. |
-| `cococo publish [folder]` | Validate then publish. Flips DRAFT → ACTIVE. |
-| `cococo pull <integrationId> [-v X] [-f] [--format ts\|yaml]` | Materialize a remote draft into `./integrations/<short-name>/`. Writes `manifest.ts` by default (with all v2 sources materialised via `luaFile()`); `--format yaml` writes `manifest.yaml` instead. Use `-f` to overwrite a non-empty folder. |
-| `cococo migrate [folder]` | Fork a v1 YAML integration into a v2 TS sibling at `<folder>_v2/`. Auto-bumps the minor version, copies bundle artefacts, writes a v2 `manifest.ts` skeleton with placeholder handler files, then shells out to `claude -p` to refactor `scripts/main.lua` into per-handler Lua files. The original v1 folder is left untouched — review the diff in the new folder, then push when ready. Requires Claude Code on PATH; without it, the skeleton is still emitted and a self-contained prompt is dropped at `<folder>_v2/.cococo-migrate-prompt.txt` for manual use. |
-| `cococo setup-mcp claude [-n name] [-u url] [-s scope]` | Register the cococo MCP endpoint with Claude Code. Derives the URL from `COCOCO_ENDPOINT` (`/graphql` → `/mcp`) and uses `COCOCO_TOKEN` for auth. Shells out to `claude mcp add`; prints fallback instructions if the `claude` CLI isn't installed. |
-| `cococo mcp swagger <path>` | Run a stdio MCP server that exposes read-only discovery tools (`get_info`, `list_operations`, `search_operations`, `get_operation`, `list_tags`, `get_schema`) over a local OpenAPI/Swagger 2.0 or 3.x spec (`.json` or `.yaml`). `$ref`s are resolved on demand with cycle detection. Useful when authoring an integration that targets a third-party API — point Claude Code at the spec so it can discover endpoints and schemas without you pasting them in. |
-| `cococo mcp add <path> [-n name] [-s scope]` | Convenience wrapper that registers the swagger MCP server with Claude Code in one step. Parses the spec, derives a name from `info.title` (override with `-n`), resolves the path to absolute, and runs `claude mcp add --transport stdio … -- bunx cococo mcp swagger <path>`. Prints fallback instructions if the `claude` CLI isn't installed. |
+| `cococo init <id>` | Scaffold an integration under `integrations/<short-name>/` |
+| `cococo init <handle> --type app` | Scaffold a custom app under `custom_apps/<handle>/` |
+| `cococo push [folder] [--strict]` | Mirror local → remote (runs lint first) |
+| `cococo status [folder]` | Diff local vs remote (read-only) |
+| `cococo lint [folder] [--strict]` | Validate every Lua chunk via the server |
+| `cococo validate [folder]` | Server-validate the remote draft (integrations only) |
+| `cococo publish [folder]` | Integrations: DRAFT → ACTIVE. Apps: snapshot + publish |
+| `cococo pull <id\|handle> [--type app] [-f]` | Download remote into a local folder |
+| `cococo list` | List all integrations and custom apps on the server |
+| `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |
+| `cococo setup-mcp claude` | Register the cococo MCP endpoint with Claude Code |
+| `cococo mcp swagger <path>` | Run a stdio MCP server over an OpenAPI spec |
+| `cococo mcp add <path>` | Register the swagger MCP server with Claude Code |
 
-## Worked example
+`cococo --help` and `cococo <cmd> --help` list every flag.
 
-```sh
-# In your integrations monorepo:
-bunx cococo init com.acme.demo
-# → integrations/demo/manifest.ts + handlers/timers/heartbeat.lua
+### Engine versions
 
-# Edit handlers/timers/heartbeat.lua, add more timers / subscriptions / lifecycle
-# files as needed, and reference them from manifest.ts via luaFile().
-bunx cococo push demo
-# → custom.demo@0.1.0 (draft igd_…)
-#     +1 added, ~0 changed, -0 deleted
+- **v2** is the default for new authoring of both integrations and custom
+  apps. TS manifest, materialised handler files, `lua` / `luaFile()`
+  helpers.
+- **v1** integrations are still supported for existing folders via
+  `manifest.yaml` (entry-script + global `exports` table). New drafts
+  default to v2 — see [Migrating v1 integrations](#migrating-v1-integrations).
+- **v1 custom apps** are not authored through this CLI; the platform
+  defaults new apps to v2.
 
-bunx cococo status demo
-# → no changes
+### YAML manifests (integrations only)
 
-bunx cococo validate demo
-# → custom.demo@0.1.0: valid.
+For existing v1 folders or anyone who prefers YAML, `manifest.yaml`
+mirrors the platform's `IntegrationManifest` shape (snake_case). The CLI
+adds one local-only key — `engine_version: 1 | 2` — so push/pull
+round-trip cleanly. A folder can have **either** `manifest.ts` or
+`manifest.yaml`, never both.
 
-bunx cococo publish demo
-# → custom.demo@0.1.0: ACTIVE
-
-# Bump version in manifest.yaml to 0.1.1, then push again.
-bunx cococo push demo
-# → new draft igd_… created
-```
-
-## Tests
+To opt into YAML:
 
 ```sh
-bun test              # unit tests only (fast, no network)
-bun run test:integration   # full lifecycle against a real tenant — requires
-                           # COCOCO_ENDPOINT + COCOCO_TOKEN, gated on
-                           # COCOCO_INTEGRATION_TEST=1.
+bunx cococo init com.acme.foo --format yaml
+bunx cococo pull com.acme.foo --format yaml
 ```
 
-The integration test creates a unique `custom.cli-test-<ts>` integration per
-run and exercises init/push/status/validate/publish/pull. Run it against a
-disposable platform — drafts can't be deleted via the public API.
+For v2 YAML, the source files at the conventional paths bind to manifest
+entries by convention (e.g. `handlers/timers/tick.lua` → the timer named
+`tick`). Stray files, duplicate timer names, and v2-only keys on a v1
+manifest all fail loudly at push time.
 
-## Notes / limitations
+### Embedded sub-apps inside integrations
 
-- **Drafts only.** The CLI never touches integration *instances* or config
-  bindings — those are managed elsewhere (UI / Terraform).
-- **Version is the rename.** Published versions are immutable; bump
-  `manifest.yaml`'s `version` to start a new draft.
-- **No watch/dev mode.** Push manually after edits. (Planned for a follow-up.)
-- **No local Lua syntax check.** Use the platform's `validate` for now.
+An integration can ship its own widget under `app/`:
+
+- `app/index.html` — Vue template
+- `app/script.js` — client script
+- `app/server.lua` — optional Lua RPC
+
+These travel as part of the integration bundle (no separate manifest
+declaration). Different from a top-level **custom app** — those are
+reusable across the tenant, addressable by handle, and live under
+`custom_apps/`.
+
+## Notes & limitations
+
+- **Drafts and working copies only.** This CLI doesn't touch integration
+  *instances*, config bindings, or runtime state — those are managed
+  elsewhere.
+- **No watch / dev mode.** Push manually after edits. (Planned.)
+- **Custom apps are v2-only here.** v1 custom apps exist on the platform
+  but aren't authored through this CLI.
+
+## Hacking on the CLI itself
+
+```sh
+git clone https://github.com/wearecococo/dev-cli
+cd dev-cli
+bun install
+bun link             # exposes `cococo` on PATH from src/index.ts
+bun test             # unit tests (no network)
+bun run typecheck
+COCOCO_INTEGRATION_TEST=1 bun run test:integration  # full lifecycle, real tenant
+```
+
+The integration test creates a `custom.cli-test-<ts>` integration per
+run and walks init → push → status → validate → publish → pull. Run it
+against a disposable tenant — drafts can't be deleted via the public
+API, so each run leaks one definition.
+
+`bun unlink` to remove the local link.

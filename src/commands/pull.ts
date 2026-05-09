@@ -1,7 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { createClient } from "../graphql/client.ts";
-import { getDefinition, listDefinitions } from "../graphql/operations.ts";
+import { createClient, type GraphQLClient } from "../graphql/client.ts";
+import {
+  getCustomAppByHandle,
+  getDefinition,
+  listDefinitions,
+} from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { bundleToFiles } from "../bundle.ts";
 import {
@@ -11,21 +15,34 @@ import {
   shortName,
 } from "../manifest.ts";
 import { MANIFEST_TS_FILENAME, type ManifestFormat } from "../loader.ts";
-import { printManifestTs } from "../printer.ts";
+import {
+  CUSTOM_APPS_DIR,
+  INTEGRATIONS_DIR,
+} from "../project.ts";
+import { printAppManifestTs, printManifestTs } from "../printer.ts";
 import { extractManifestSources } from "../sources.ts";
 
 export type PullOptions = {
   version?: string;
   force: boolean;
   format?: ManifestFormat;
+  /** "integration" (default) targets a remote draft; "app" targets a custom app's working copy. */
+  type?: "integration" | "app";
 };
 
 export async function runPull(
-  integrationId: string,
+  idOrHandle: string,
   opts: PullOptions,
   overrides: ConfigOverrides,
 ): Promise<void> {
   const client = createClient(loadConfig(overrides));
+  const type = opts.type ?? "integration";
+
+  if (type === "app") {
+    return runPullCustomApp(client, idOrHandle, opts);
+  }
+
+  const integrationId = idOrHandle;
   const format: ManifestFormat = opts.format ?? "ts";
 
   const drafts = await listDefinitions(client, { integrationId, status: "DRAFT" });
@@ -51,7 +68,7 @@ export async function runPull(
   const full = await getDefinition(client, chosen.id);
   if (!full.bundle) throw new Error(`Definition ${chosen.id} returned without a bundle.`);
 
-  const target = resolve(process.cwd(), "integrations", shortName(integrationId));
+  const target = resolve(process.cwd(), INTEGRATIONS_DIR, shortName(integrationId));
   if (existsSync(target) && readdirSync(target).length > 0 && !opts.force) {
     throw new Error(`${target} already exists and is not empty. Use --force to overwrite.`);
   }
@@ -94,7 +111,7 @@ export async function runPull(
   writeMaterialised(target, sourceFiles);
   const totalFiles = bundleFiles.size + sourceFiles.size + 1;
   console.log(
-    `Pulled ${integrationId}@${chosen.version} into integrations/${shortName(
+    `Pulled ${integrationId}@${chosen.version} into ${INTEGRATIONS_DIR}/${shortName(
       integrationId,
     )}/ (${totalFiles} file(s); manifest.yaml + ${sourceFiles.size} v2 source file(s))`,
   );
@@ -106,6 +123,55 @@ function writeMaterialised(target: string, files: Map<string, string>): void {
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, content);
   }
+}
+
+async function runPullCustomApp(
+  client: GraphQLClient,
+  handle: string,
+  opts: PullOptions,
+): Promise<void> {
+  if (opts.format === "yaml") {
+    throw new Error(
+      `Custom apps are TS-only — there's no YAML manifest format. Drop '--format yaml'.`,
+    );
+  }
+  const remote = await getCustomAppByHandle(client, handle);
+  if (!remote) {
+    throw new Error(`No custom app found for handle '${handle}'.`);
+  }
+
+  const target = resolve(process.cwd(), CUSTOM_APPS_DIR, handle);
+  if (existsSync(target) && readdirSync(target).length > 0 && !opts.force) {
+    throw new Error(`${target} already exists and is not empty. Use --force to overwrite.`);
+  }
+  mkdirSync(target, { recursive: true });
+
+  const hasServerApi = typeof remote.serverApi === "string" && remote.serverApi !== "";
+  writeFileSync(join(target, "template.vue"), remote.template);
+  writeFileSync(join(target, "script.js"), remote.script);
+  if (hasServerApi) {
+    writeFileSync(join(target, "server.lua"), remote.serverApi as string);
+  }
+
+  writeFileSync(
+    join(target, MANIFEST_TS_FILENAME),
+    printAppManifestTs({
+      handle: remote.handle,
+      name: remote.name,
+      kind: remote.kind,
+      icon: remote.icon,
+      templatePath: "template.vue",
+      scriptPath: "script.js",
+      serverApiPath: hasServerApi ? "server.lua" : undefined,
+      dataContainerSpec: remote.dataContainerSpec ?? undefined,
+    }),
+  );
+
+  const fileCount = 1 + 1 + 1 + (hasServerApi ? 1 : 0);
+  console.log(
+    `Pulled custom app ${remote.handle} into ${CUSTOM_APPS_DIR}/${remote.handle}/ ` +
+      `(${fileCount} file(s); publishedVersion: ${remote.publishedVersion ?? "(none)"})`,
+  );
 }
 
 function compareVersions(a: string, b: string): number {

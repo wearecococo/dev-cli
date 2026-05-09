@@ -378,3 +378,211 @@ function unwrap<T>(
   }
   return payload.definition;
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Custom apps. A first-class top-level entity alongside integrations —
+// authored locally as a folder under `custom_apps/<handle>/`, pushed to
+// the platform's working copy via `upsertCustomApp`, and published by
+// snapshotting the working copy as a `CustomAppVersion` and flipping
+// the `publishedVersion` pointer.
+// ──────────────────────────────────────────────────────────────────────
+
+export type CustomAppKind = "PAGE" | "DASHBOARD" | "KIOSK" | "JOB_VIEW";
+
+export type CustomAppState = {
+  id: string;
+  name: string;
+  handle: string;
+  icon: string;
+  kind: CustomAppKind;
+  template: string;
+  script: string;
+  serverApi?: string | null;
+  hasServerApi: boolean;
+  dataContainerSpec?: string | null;
+  publishedVersion?: number | null;
+  engineVersion: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CustomAppVersionState = {
+  id: string;
+  customAppId: string;
+  version: number;
+  template: string;
+  script: string;
+  serverApi?: string | null;
+  description?: string | null;
+  engineVersion: number;
+  createdAt: string;
+};
+
+const CUSTOM_APP_FIELDS = `
+  id
+  name
+  handle
+  icon
+  kind
+  template
+  script
+  serverApi
+  hasServerApi
+  dataContainerSpec
+  publishedVersion
+  engineVersion
+  createdAt
+  updatedAt
+`;
+
+export async function listCustomApps(
+  client: GraphQLClient,
+): Promise<CustomAppState[]> {
+  const query = `
+    query ListCustomApps {
+      listCustomApps(first: 200) {
+        edges { node { ${CUSTOM_APP_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listCustomApps: { edges: { node: CustomAppState }[] };
+  }>(query, {});
+  return data.listCustomApps.edges.map((e) => e.node);
+}
+
+export async function getCustomAppByHandle(
+  client: GraphQLClient,
+  handle: string,
+): Promise<CustomAppState | undefined> {
+  const query = `
+    query GetCustomAppByHandle($handle: String!) {
+      getCustomAppByHandle(handle: $handle) { ${CUSTOM_APP_FIELDS} }
+    }
+  `;
+  const data = await client.request<{ getCustomAppByHandle: CustomAppState | null }>(
+    query,
+    { handle },
+  );
+  return data.getCustomAppByHandle ?? undefined;
+}
+
+export async function getCustomApp(
+  client: GraphQLClient,
+  id: string,
+): Promise<CustomAppState> {
+  const query = `
+    query GetCustomApp($id: CustomAppID!) {
+      getCustomApp(id: $id) { ${CUSTOM_APP_FIELDS} }
+    }
+  `;
+  const data = await client.request<{ getCustomApp: CustomAppState | null }>(query, { id });
+  if (!data.getCustomApp) throw new Error(`Custom app ${id} not found.`);
+  return data.getCustomApp;
+}
+
+export async function upsertCustomApp(
+  client: GraphQLClient,
+  input: {
+    id?: string;
+    name: string;
+    handle: string;
+    kind: CustomAppKind;
+    icon?: string;
+    dataContainerSpec?: string;
+    config: { template: string; script: string; serverApi?: string };
+  },
+): Promise<CustomAppState> {
+  const query = `
+    mutation UpsertCustomApp($input: UpsertCustomAppInput!) {
+      upsertCustomApp(input: $input) {
+        customApp { ${CUSTOM_APP_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertCustomApp: { customApp: CustomAppState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.upsertCustomApp.errors.length > 0) {
+    const summary = data.upsertCustomApp.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`upsertCustomApp failed: ${summary}`);
+  }
+  if (!data.upsertCustomApp.customApp) {
+    throw new Error(`upsertCustomApp returned no customApp and no errors.`);
+  }
+  return data.upsertCustomApp.customApp;
+}
+
+export async function createCustomAppVersion(
+  client: GraphQLClient,
+  input: {
+    customAppId: string;
+    config: { template: string; script: string; serverApi?: string };
+    description?: string;
+  },
+): Promise<CustomAppVersionState> {
+  const query = `
+    mutation CreateCustomAppVersion($input: CreateCustomAppVersionInput!) {
+      createCustomAppVersion(input: $input) {
+        version {
+          id
+          customAppId
+          version
+          template
+          script
+          serverApi
+          description
+          engineVersion
+          createdAt
+        }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    createCustomAppVersion: {
+      version: CustomAppVersionState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input });
+  if (data.createCustomAppVersion.errors.length > 0) {
+    const summary = data.createCustomAppVersion.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`createCustomAppVersion failed: ${summary}`);
+  }
+  if (!data.createCustomAppVersion.version) {
+    throw new Error(`createCustomAppVersion returned no version and no errors.`);
+  }
+  return data.createCustomAppVersion.version;
+}
+
+export async function publishCustomApp(
+  client: GraphQLClient,
+  input: { id: string; version: number },
+): Promise<CustomAppState> {
+  const query = `
+    mutation PublishCustomApp($input: PublishCustomAppInput!) {
+      publishCustomApp(input: $input) {
+        customApp { ${CUSTOM_APP_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    publishCustomApp: { customApp: CustomAppState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.publishCustomApp.errors.length > 0) {
+    const summary = data.publishCustomApp.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`publishCustomApp failed: ${summary}`);
+  }
+  if (!data.publishCustomApp.customApp) {
+    throw new Error(`publishCustomApp returned no customApp and no errors.`);
+  }
+  return data.publishCustomApp.customApp;
+}
