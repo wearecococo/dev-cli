@@ -8,8 +8,16 @@ import {
   shortName,
 } from "../manifest.ts";
 import { MANIFEST_TS_FILENAME, type ManifestFormat } from "../loader.ts";
-import { CUSTOM_APPS_DIR, INTEGRATIONS_DIR } from "../project.ts";
-import { printAppManifestTs, printManifestTs } from "../printer.ts";
+import {
+  CUSTOM_APPS_DIR,
+  EDGE_APPS_DIR,
+  INTEGRATIONS_DIR,
+} from "../project.ts";
+import {
+  printAppManifestTs,
+  printEdgeAppManifestTs,
+  printManifestTs,
+} from "../printer.ts";
 import { timerHandlerPath } from "../sources.ts";
 import { assertDevCliResolvable } from "../dev-cli-resolution.ts";
 import type {
@@ -45,17 +53,16 @@ export type InitOptions = {
   version: string;
   engineVersion?: EngineVersion;
   format?: ManifestFormat;
-  /** "integration" (default) scaffolds under integrations/; "app" under custom_apps/. */
-  type?: "integration" | "app";
+  /** "integration" (default) | "app" (custom app) | "edge" (edge app). */
+  type?: "integration" | "app" | "edge";
   /** Custom-app only — defaults to PAGE. */
   appKind?: CustomAppKind;
 };
 
 export async function runInit(idOrHandle: string, opts: InitOptions): Promise<void> {
   const type = opts.type ?? "integration";
-  if (type === "app") {
-    return runInitCustomApp(idOrHandle, opts);
-  }
+  if (type === "app") return runInitCustomApp(idOrHandle, opts);
+  if (type === "edge") return runInitEdgeApp(idOrHandle, opts);
   return runInitIntegration(idOrHandle, opts);
 }
 
@@ -211,8 +218,63 @@ async function runInitCustomApp(handle: string, opts: InitOptions): Promise<void
 
 function humaniseHandle(handle: string): string {
   return handle
-    .split("-")
+    .split(/[-_]/)
     .filter((p) => p.length > 0)
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join(" ");
+}
+
+const STARTER_EDGE_HEARTBEAT_LUA = `-- Edge-app heartbeat handler.
+-- Runs in the EDGE_APP role on a controller; \`bridge.*\` APIs are
+-- available, \`ctx.integration.*\` is not.
+
+bridge.log.info("heartbeat from edge app")
+`;
+
+async function runInitEdgeApp(handle: string, opts: InitOptions): Promise<void> {
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(handle)) {
+    throw new Error(
+      `Edge app handle should be lowercase letters, digits, hyphens, or underscores. ` +
+        `Got: ${handle}`,
+    );
+  }
+  if (opts.format === "yaml") {
+    throw new Error(
+      `Edge apps are TS-only — there's no YAML manifest format. Drop '--format yaml'.`,
+    );
+  }
+
+  assertDevCliResolvable(process.cwd());
+
+  const target = resolve(process.cwd(), EDGE_APPS_DIR, handle);
+  if (existsSync(target)) {
+    throw new Error(`Folder already exists: ${target}`);
+  }
+  mkdirSync(target, { recursive: true });
+  mkdirSync(join(target, "handlers"), { recursive: true });
+
+  writeFileSync(join(target, "handlers", "heartbeat.lua"), STARTER_EDGE_HEARTBEAT_LUA);
+
+  writeFileSync(
+    join(target, MANIFEST_TS_FILENAME),
+    printEdgeAppManifestTs({
+      handle,
+      name: humaniseHandle(handle),
+      description: `Scaffold edge app for ${handle}.`,
+      logLevel: "INFO",
+      handlers: [{ name: "heartbeat", path: "handlers/heartbeat.lua" }],
+      triggers: [
+        {
+          kind: "CRON",
+          name: "tick",
+          handler: "heartbeat",
+          schedule: "*/5 * * * *",
+        },
+      ],
+    }),
+  );
+
+  console.log(`Created ${EDGE_APPS_DIR}/${handle}/ (edge app)`);
+  console.log(`  ${MANIFEST_TS_FILENAME}`);
+  console.log(`  handlers/heartbeat.lua`);
 }

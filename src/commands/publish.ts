@@ -1,14 +1,16 @@
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   createCustomAppVersion,
+  findEdgeAppDraft,
   getCustomAppByHandle,
   publishCustomApp,
   publishDraft,
+  publishEdgeAppDraft,
   upsertCustomApp,
   validateDraft,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
-import type { LoadedCustomApp } from "../loader.ts";
+import type { LoadedCustomApp, LoadedEdgeApp } from "../loader.ts";
 import { findDefinition, loadLocal } from "./_shared.ts";
 
 export async function runPublish(
@@ -20,6 +22,10 @@ export async function runPublish(
 
   if (loaded.kind === "app") {
     await publishApp(client, loaded);
+    return;
+  }
+  if (loaded.kind === "edge") {
+    await publishEdge(client, loaded);
     return;
   }
   await publishIntegration(client, loaded.manifest.id, loaded.manifest.version);
@@ -94,5 +100,27 @@ async function publishApp(client: GraphQLClient, loaded: LoadedCustomApp): Promi
   });
   console.log(
     `${published.handle}: published v${published.publishedVersion ?? snapshot.version} (${published.id})`,
+  );
+}
+
+/**
+ * Publish an edge-app draft. The platform expects a DRAFT row to exist —
+ * `publishEdgeAppDraft` flips it to PUBLISHED and auto-deprecates the
+ * prior PUBLISHED. We don't re-upsert here (unlike custom apps): edge
+ * apps have a real DRAFT/PUBLISHED lifecycle, so the user is expected
+ * to have run `push` first.
+ */
+async function publishEdge(client: GraphQLClient, loaded: LoadedEdgeApp): Promise<void> {
+  const draft = await findEdgeAppDraft(client, loaded.app.handle);
+  if (!draft || draft.status !== "DRAFT") {
+    throw new Error(
+      `No DRAFT found for edge app '${loaded.app.handle}'. Run 'cococo push' first ` +
+        `to create or update the draft, then publish.`,
+    );
+  }
+  const published = await publishEdgeAppDraft(client, draft.id);
+  console.log(
+    `${published.handle}: published v${published.version} (${published.id}). ` +
+      `Prior PUBLISHED auto-deprecated.`,
   );
 }

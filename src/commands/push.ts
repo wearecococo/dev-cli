@@ -2,12 +2,15 @@ import { readFileSync } from "node:fs";
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   createDraft,
+  findEdgeAppDraft,
   getCustomAppByHandle,
   getDefinition,
   updateDraftFile,
   updateDraftManifest,
   upsertCustomApp,
+  upsertEdgeApp,
   type CustomAppState,
+  type EdgeAppState,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { makeFolder, walkIntegrationFiles } from "../project.ts";
@@ -26,6 +29,7 @@ import {
 } from "../sources.ts";
 import type {
   LoadedCustomApp,
+  LoadedEdgeApp,
   LoadedIntegration,
 } from "../loader.ts";
 import { findDefinition, loadLocal } from "./_shared.ts";
@@ -51,6 +55,10 @@ export async function runPush(
 
   if (loaded.kind === "app") {
     await pushCustomApp(client, folder.path, loaded);
+    return;
+  }
+  if (loaded.kind === "edge") {
+    await pushEdgeApp(client, folder.path, loaded);
     return;
   }
   await pushIntegration(client, folder.path, loaded);
@@ -244,4 +252,52 @@ function reportCustomAppPush(
     : ` (no published version yet — run 'cococo publish' to snapshot + publish)`;
   console.log(`${verb} custom app ${result.handle} → ${result.id}${published}`);
   console.log(`  folder: ${folderPath}`);
+}
+
+async function pushEdgeApp(
+  client: GraphQLClient,
+  folderPath: string,
+  loaded: LoadedEdgeApp,
+): Promise<void> {
+  const { app } = loaded;
+
+  // Edge-app row keyed by handle. If a DRAFT already exists, we update
+  // it; if only PUBLISHED/DEPRECATED rows exist, upsertEdgeApp without
+  // an id creates a fresh DRAFT (the platform allows at most one DRAFT
+  // per handle so a second push without bumping past the publish lands
+  // back on the same row).
+  const existing = await findEdgeAppDraft(client, app.handle);
+  const draftId = existing?.status === "DRAFT" ? existing.id : undefined;
+
+  const result = await upsertEdgeApp(client, {
+    id: draftId,
+    handle: app.handle,
+    name: app.name,
+    description: app.description,
+    triggers: app.triggers,
+    handlers: app.handlers,
+    libraries: app.libraries,
+    onMessage: app.on_message,
+    configSchema: app.config_schema,
+    logLevel: app.log_level,
+    isActive: app.is_active,
+  });
+
+  reportEdgeAppPush(result, folderPath, draftId !== undefined);
+}
+
+function reportEdgeAppPush(
+  result: EdgeAppState,
+  folderPath: string,
+  hadExistingDraft: boolean,
+): void {
+  const verb = hadExistingDraft ? "Updated" : "Created";
+  console.log(
+    `${verb} edge app ${result.handle} (DRAFT v${result.version}) → ${result.id}`,
+  );
+  console.log(`  folder: ${folderPath}`);
+  console.log(
+    `  ${result.handlers.length} handler(s), ${result.triggers.length} trigger(s), ` +
+      `${result.libraries.length} librar${result.libraries.length === 1 ? "y" : "ies"}`,
+  );
 }

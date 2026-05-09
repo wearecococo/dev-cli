@@ -265,12 +265,11 @@ export type ValidationResult = { valid: boolean; errors: FieldError[] };
 
 /**
  * Roles understood by the Lua validator. The role determines which
- * `ctx.*` APIs are visible — e.g. `ctx.integration.*` exists in
- * INTEGRATION but not in CUSTOM_APP. EDGE_APP is recognised by the
- * server but not yet emitted by this CLI; add it here once primitives
- * stabilise.
+ * `ctx.*` / `bridge.*` APIs are visible — e.g. `ctx.integration.*`
+ * exists in INTEGRATION, `bridge.loadLib` / `bridge.log.*` in EDGE_APP,
+ * and CUSTOM_APP has its own slimmer surface.
  */
-export type ValidateLuaRole = "INTEGRATION" | "CUSTOM_APP";
+export type ValidateLuaRole = "INTEGRATION" | "CUSTOM_APP" | "EDGE_APP";
 
 export type LuaSeverity = "ERROR" | "WARNING";
 
@@ -585,4 +584,194 @@ export async function publishCustomApp(
     throw new Error(`publishCustomApp returned no customApp and no errors.`);
   }
   return data.publishCustomApp.customApp;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Edge apps. A tenant-scoped template installable on N controllers.
+// Identified by handle, monotonic Int versioning, lifecycle DRAFT →
+// PUBLISHED → DEPRECATED. Authoring this CLI: upsert the DRAFT, publish
+// when ready (auto-deprecates the prior PUBLISHED).
+// ──────────────────────────────────────────────────────────────────────
+
+export type EdgeAppStatus = "DRAFT" | "PUBLISHED" | "DEPRECATED";
+
+export type EdgeAppTriggerKind = "CRON" | "TAIL" | "FILE_CREATED" | "FILE_DELETED";
+
+export type EdgeAppLogLevel = "DEBUG" | "INFO" | "WARNING" | "ERROR" | "OFF";
+
+export type EdgeAppTrigger = {
+  kind: EdgeAppTriggerKind;
+  name: string;
+  handler: string;
+  schedule?: string | null;
+  path?: string | null;
+  pattern?: string | null;
+};
+
+export type EdgeAppHandler = {
+  name: string;
+  source: string;
+};
+
+export type EdgeAppLibrary = {
+  name: string;
+  source: string;
+};
+
+export type EdgeAppState = {
+  id: string;
+  handle: string;
+  name: string;
+  description?: string | null;
+  version: number;
+  status: EdgeAppStatus;
+  triggers: EdgeAppTrigger[];
+  handlers: EdgeAppHandler[];
+  libraries: EdgeAppLibrary[];
+  onMessage?: string | null;
+  configSchema?: unknown;
+  logLevel?: EdgeAppLogLevel | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const EDGE_APP_SUMMARY = `
+  id
+  handle
+  name
+  description
+  version
+  status
+  isActive
+  logLevel
+  createdAt
+  updatedAt
+`;
+
+const EDGE_APP_FULL = `
+  ${EDGE_APP_SUMMARY}
+  triggers { kind name handler schedule path pattern }
+  handlers { name source }
+  libraries { name source }
+  onMessage
+  configSchema
+`;
+
+export async function listEdgeApps(
+  client: GraphQLClient,
+  filter?: { handle?: string; status?: EdgeAppStatus },
+): Promise<EdgeAppState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.handle) filterArg.handle = { eq: filter.handle };
+  if (filter?.status) filterArg.status = { eq: filter.status };
+  const query = `
+    query ListEdgeApps($filter: EdgeAppFilterInput) {
+      listEdgeApps(first: 200, filter: $filter) {
+        edges { node { ${EDGE_APP_SUMMARY} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listEdgeApps: { edges: { node: EdgeAppState }[] };
+  }>(query, { filter: filterArg });
+  return data.listEdgeApps.edges.map((e) => e.node);
+}
+
+export async function getEdgeApp(
+  client: GraphQLClient,
+  id: string,
+): Promise<EdgeAppState> {
+  const query = `
+    query GetEdgeApp($id: EdgeAppID!) {
+      getEdgeApp(id: $id) { ${EDGE_APP_FULL} }
+    }
+  `;
+  const data = await client.request<{ getEdgeApp: EdgeAppState | null }>(query, { id });
+  if (!data.getEdgeApp) throw new Error(`Edge app ${id} not found.`);
+  return data.getEdgeApp;
+}
+
+/**
+ * Resolve an edge app by handle, preferring the DRAFT (which is what
+ * the CLI authors against). Returns undefined if no row exists for the
+ * handle in any state.
+ */
+export async function findEdgeAppDraft(
+  client: GraphQLClient,
+  handle: string,
+): Promise<EdgeAppState | undefined> {
+  const matches = await listEdgeApps(client, { handle });
+  if (matches.length === 0) return undefined;
+  const draft = matches.find((m) => m.status === "DRAFT");
+  if (draft) return getEdgeApp(client, draft.id);
+  // No DRAFT — return the most-recent row (PUBLISHED / DEPRECATED) so
+  // the caller can decide what to do (push will create a new DRAFT).
+  return getEdgeApp(client, matches[0]!.id);
+}
+
+export async function upsertEdgeApp(
+  client: GraphQLClient,
+  input: {
+    id?: string;
+    handle: string;
+    name: string;
+    description?: string;
+    triggers: EdgeAppTrigger[];
+    handlers: EdgeAppHandler[];
+    libraries?: EdgeAppLibrary[];
+    onMessage?: string;
+    configSchema?: unknown;
+    logLevel?: EdgeAppLogLevel;
+    isActive?: boolean;
+  },
+): Promise<EdgeAppState> {
+  const query = `
+    mutation UpsertEdgeApp($input: UpsertEdgeAppInput!) {
+      upsertEdgeApp(input: $input) {
+        edgeApp { ${EDGE_APP_FULL} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertEdgeApp: { edgeApp: EdgeAppState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.upsertEdgeApp.errors.length > 0) {
+    const summary = data.upsertEdgeApp.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`upsertEdgeApp failed: ${summary}`);
+  }
+  if (!data.upsertEdgeApp.edgeApp) {
+    throw new Error(`upsertEdgeApp returned no edgeApp and no errors.`);
+  }
+  return data.upsertEdgeApp.edgeApp;
+}
+
+export async function publishEdgeAppDraft(
+  client: GraphQLClient,
+  id: string,
+): Promise<EdgeAppState> {
+  const query = `
+    mutation PublishEdgeAppDraft($id: EdgeAppID!) {
+      publishEdgeAppDraft(id: $id) {
+        edgeApp { ${EDGE_APP_FULL} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    publishEdgeAppDraft: { edgeApp: EdgeAppState | null; errors: FieldError[] };
+  }>(query, { id });
+  if (data.publishEdgeAppDraft.errors.length > 0) {
+    const summary = data.publishEdgeAppDraft.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`publishEdgeAppDraft failed: ${summary}`);
+  }
+  if (!data.publishEdgeAppDraft.edgeApp) {
+    throw new Error(`publishEdgeAppDraft returned no edgeApp and no errors.`);
+  }
+  return data.publishEdgeAppDraft.edgeApp;
 }

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
+  findEdgeAppDraft,
   getCustomAppByHandle,
   getDefinition,
   listDefinitions,
@@ -17,17 +18,22 @@ import {
 import { MANIFEST_TS_FILENAME, type ManifestFormat } from "../loader.ts";
 import {
   CUSTOM_APPS_DIR,
+  EDGE_APPS_DIR,
   INTEGRATIONS_DIR,
 } from "../project.ts";
-import { printAppManifestTs, printManifestTs } from "../printer.ts";
+import {
+  printAppManifestTs,
+  printEdgeAppManifestTs,
+  printManifestTs,
+} from "../printer.ts";
 import { extractManifestSources } from "../sources.ts";
 
 export type PullOptions = {
   version?: string;
   force: boolean;
   format?: ManifestFormat;
-  /** "integration" (default) targets a remote draft; "app" targets a custom app's working copy. */
-  type?: "integration" | "app";
+  /** "integration" (default) | "app" (custom app working copy) | "edge" (edge-app DRAFT). */
+  type?: "integration" | "app" | "edge";
 };
 
 export async function runPull(
@@ -40,6 +46,9 @@ export async function runPull(
 
   if (type === "app") {
     return runPullCustomApp(client, idOrHandle, opts);
+  }
+  if (type === "edge") {
+    return runPullEdgeApp(client, idOrHandle, opts);
   }
 
   const integrationId = idOrHandle;
@@ -171,6 +180,85 @@ async function runPullCustomApp(
   console.log(
     `Pulled custom app ${remote.handle} into ${CUSTOM_APPS_DIR}/${remote.handle}/ ` +
       `(${fileCount} file(s); publishedVersion: ${remote.publishedVersion ?? "(none)"})`,
+  );
+}
+
+async function runPullEdgeApp(
+  client: GraphQLClient,
+  handle: string,
+  opts: PullOptions,
+): Promise<void> {
+  if (opts.format === "yaml") {
+    throw new Error(
+      `Edge apps are TS-only — there's no YAML manifest format. Drop '--format yaml'.`,
+    );
+  }
+  const remote = await findEdgeAppDraft(client, handle);
+  if (!remote) {
+    throw new Error(`No edge app found for handle '${handle}'.`);
+  }
+
+  const target = resolve(process.cwd(), EDGE_APPS_DIR, handle);
+  if (existsSync(target) && readdirSync(target).length > 0 && !opts.force) {
+    throw new Error(`${target} already exists and is not empty. Use --force to overwrite.`);
+  }
+  mkdirSync(target, { recursive: true });
+  mkdirSync(join(target, "handlers"), { recursive: true });
+
+  for (const h of remote.handlers) {
+    writeFileSync(join(target, "handlers", `${h.name}.lua`), h.source);
+  }
+  if (remote.libraries.length > 0) {
+    mkdirSync(join(target, "libraries"), { recursive: true });
+    for (const l of remote.libraries) {
+      writeFileSync(join(target, "libraries", `${l.name}.lua`), l.source);
+    }
+  }
+  let onMessagePath: string | undefined;
+  if (remote.onMessage && remote.onMessage !== "") {
+    writeFileSync(join(target, "onMessage.lua"), remote.onMessage);
+    onMessagePath = "onMessage.lua";
+  }
+
+  writeFileSync(
+    join(target, MANIFEST_TS_FILENAME),
+    printEdgeAppManifestTs({
+      handle: remote.handle,
+      name: remote.name,
+      description: remote.description ?? undefined,
+      logLevel: remote.logLevel ?? undefined,
+      isActive: remote.isActive,
+      handlers: remote.handlers.map((h) => ({
+        name: h.name,
+        path: `handlers/${h.name}.lua`,
+      })),
+      libraries: remote.libraries.length
+        ? remote.libraries.map((l) => ({ name: l.name, path: `libraries/${l.name}.lua` }))
+        : undefined,
+      onMessagePath,
+      configSchema: remote.configSchema,
+      triggers: remote.triggers.map((t) => {
+        if (t.kind === "CRON") {
+          return { kind: "CRON", name: t.name, handler: t.handler, schedule: t.schedule ?? "" };
+        }
+        if (t.kind === "TAIL") {
+          return { kind: "TAIL", name: t.name, handler: t.handler, path: t.path ?? "" };
+        }
+        return {
+          kind: t.kind,
+          name: t.name,
+          handler: t.handler,
+          path: t.path ?? "",
+          ...(t.pattern ? { pattern: t.pattern } : {}),
+        };
+      }),
+    }),
+  );
+
+  const fileCount = 1 + remote.handlers.length + remote.libraries.length + (onMessagePath ? 1 : 0);
+  console.log(
+    `Pulled edge app ${remote.handle} into ${EDGE_APPS_DIR}/${remote.handle}/ ` +
+      `(${fileCount} file(s); ${remote.status} v${remote.version})`,
   );
 }
 

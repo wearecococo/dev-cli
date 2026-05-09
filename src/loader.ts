@@ -13,10 +13,17 @@ import {
   manifestKind,
   type CustomAppKind,
   type CustomAppV2,
+  type EdgeAppLogLevel,
+  type EdgeAppV2,
   type IntegrationDefinition,
   type IntegrationV2,
   type ManifestKind,
 } from "./define.ts";
+import type {
+  EdgeAppHandler,
+  EdgeAppLibrary,
+  EdgeAppTrigger,
+} from "./graphql/operations.ts";
 
 export const MANIFEST_TS_FILENAME = "manifest.ts";
 
@@ -55,7 +62,7 @@ export type ManifestSourcePath = string;
  * `manifestKind()` tag stamped onto the result of `defineIntegration` /
  * `defineCustomApp`.
  */
-export type LoadedManifest = LoadedIntegration | LoadedCustomApp;
+export type LoadedManifest = LoadedIntegration | LoadedCustomApp | LoadedEdgeApp;
 
 export type LoadedIntegration = {
   kind: "integration";
@@ -108,6 +115,41 @@ export type CustomAppWire = {
   data_container_spec?: string;
 };
 
+export type LoadedEdgeApp = {
+  kind: "edge";
+  app: EdgeAppWire;
+  format: "ts";
+  consumed: Set<string>;
+  /**
+   * Provenance of every Lua chunk on the resolved edge-app, keyed by a
+   * stable string (`handlers.<name>` / `libraries.<name>` /
+   * `onMessage`). The lint pipeline reads this to address diagnostics
+   * back to a navigable location.
+   */
+  manifestSourceOrigins: Map<string, LuaSourceOrigin>;
+};
+
+/**
+ * Resolved edge-app shape that maps directly onto `UpsertEdgeAppInput`.
+ * `handlers` / `libraries` are arrays here (matching the GraphQL input
+ * shape) even though the author writes them as a record — the loader
+ * does the `Object.entries` conversion so push can hand the wire shape
+ * straight to the mutation.
+ */
+export type EdgeAppWire = {
+  handle: string;
+  name: string;
+  description?: string;
+  triggers: EdgeAppTrigger[];
+  handlers: EdgeAppHandler[];
+  libraries?: EdgeAppLibrary[];
+  on_message?: string;
+  /** JSON-stringified — `configSchema` is `JSON` on the input. */
+  config_schema?: unknown;
+  log_level?: EdgeAppLogLevel;
+  is_active?: boolean;
+};
+
 export async function loadManifest(folderPath: string): Promise<LoadedManifest> {
   const tsPath = resolve(folderPath, MANIFEST_TS_FILENAME);
   const yamlPath = resolve(folderPath, MANIFEST_FILENAME);
@@ -153,14 +195,23 @@ export function expectIntegration(loaded: LoadedManifest): LoadedIntegration {
 }
 
 /**
- * Narrow `LoadedManifest` to a custom app, throwing when given an
- * integration. Used by app-specific commands.
+ * Narrow `LoadedManifest` to a custom app, throwing otherwise. Used by
+ * app-specific commands.
  */
 export function expectApp(loaded: LoadedManifest): LoadedCustomApp {
   if (loaded.kind !== "app") {
-    throw new Error(
-      `Expected a custom-app manifest at this path, got an integration.`,
-    );
+    throw new Error(`Expected a custom-app manifest at this path; got ${loaded.kind}.`);
+  }
+  return loaded;
+}
+
+/**
+ * Narrow `LoadedManifest` to an edge app, throwing otherwise. Used by
+ * edge-app-specific commands.
+ */
+export function expectEdge(loaded: LoadedManifest): LoadedEdgeApp {
+  if (loaded.kind !== "edge") {
+    throw new Error(`Expected an edge-app manifest at this path; got ${loaded.kind}.`);
   }
   return loaded;
 }
@@ -175,6 +226,7 @@ async function loadTsManifest(absPath: string): Promise<LoadedManifest> {
   }
   const kind = manifestKind(spec) as ManifestKind | undefined;
   if (kind === "app") return loadTsCustomApp(spec as CustomAppV2, absPath);
+  if (kind === "edge") return loadTsEdgeApp(spec as EdgeAppV2, absPath);
   // Treat untagged exports as integrations for backwards compatibility
   // with hand-authored manifests, and matching the historical behaviour
   // before the kind tag existed.
@@ -285,6 +337,117 @@ function readSourceFile(abs: string, refLabel: string): string {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`${refLabel} could not be read: ${reason}`);
   }
+}
+
+function loadTsEdgeApp(spec: EdgeAppV2, absPath: string): LoadedManifest {
+  const manifestDir = dirname(absPath);
+  const consumed = new Set<string>();
+  const origins = new Map<string, LuaSourceOrigin>();
+
+  const handlers: EdgeAppHandler[] = [];
+  for (const [name, value] of Object.entries(spec.handlers ?? {})) {
+    const source = resolveLuaSlot(value, manifestDir, consumed, `handlers.${name}`);
+    if (source === undefined) {
+      throw new Error(
+        `edge app handler '${name}' has no source — provide a lua\`...\` snippet ` +
+          `or luaFile("./...").`,
+      );
+    }
+    handlers.push({ name, source: source.content });
+    origins.set(`handlers.${name}`, source.origin);
+  }
+
+  const libraries: EdgeAppLibrary[] = [];
+  for (const [name, value] of Object.entries(spec.libraries ?? {})) {
+    const source = resolveLuaSlot(value, manifestDir, consumed, `libraries.${name}`);
+    if (source === undefined) continue;
+    libraries.push({ name, source: source.content });
+    origins.set(`libraries.${name}`, source.origin);
+  }
+
+  let onMessage: string | undefined;
+  if (spec.onMessage !== undefined && spec.onMessage !== null) {
+    const resolved = resolveLuaSlot(spec.onMessage, manifestDir, consumed, "onMessage");
+    if (resolved) {
+      onMessage = resolved.content;
+      origins.set("onMessage", resolved.origin);
+    }
+  }
+
+  // Cross-check: every trigger.handler must reference a known handler.
+  // The TS type system already enforces this when callers use literal
+  // object keys, but a loose `as any` cast or YAML-shaped runtime input
+  // would slip through.
+  const handlerNames = new Set(handlers.map((h) => h.name));
+  const triggers: EdgeAppTrigger[] = (spec.triggers ?? []).map((t) => {
+    if (!handlerNames.has(t.handler)) {
+      throw new Error(
+        `edge app trigger '${t.name}' references handler '${t.handler}', ` +
+          `which isn't defined on this manifest. Known handlers: ` +
+          `${[...handlerNames].join(", ") || "(none)"}.`,
+      );
+    }
+    return {
+      kind: t.kind,
+      name: t.name,
+      handler: t.handler,
+      schedule: "schedule" in t ? t.schedule : undefined,
+      path: "path" in t ? t.path : undefined,
+      pattern: "pattern" in t ? t.pattern : undefined,
+    };
+  });
+
+  const app: EdgeAppWire = {
+    handle: spec.handle,
+    name: spec.name,
+    triggers,
+    handlers,
+  };
+  if (typeof spec.description === "string" && spec.description !== "") {
+    app.description = spec.description;
+  }
+  if (libraries.length > 0) app.libraries = libraries;
+  if (onMessage !== undefined) app.on_message = onMessage;
+  if (spec.configSchema !== undefined && spec.configSchema !== null) {
+    // configSchema is `JSON` on the upsert input — pass it through as a
+    // plain object; the GraphQL transport will serialise it.
+    app.config_schema = spec.configSchema;
+  }
+  if (spec.logLevel !== undefined) app.log_level = spec.logLevel;
+  if (spec.isActive !== undefined) app.is_active = spec.isActive;
+
+  return { kind: "edge", app, format: "ts", consumed, manifestSourceOrigins: origins };
+}
+
+/**
+ * Resolve a Lua slot value (one of `lua\`...\``, `luaFile()`, or an
+ * inline string) into its content + origin. Returns `undefined` only
+ * when the input is `undefined` / `null` / empty — the caller decides
+ * whether that's an error.
+ */
+function resolveLuaSlot(
+  value: unknown,
+  manifestDir: string,
+  consumed: Set<string>,
+  label: string,
+): { content: string; origin: LuaSourceOrigin } | undefined {
+  if (value == null) return undefined;
+  if (isLuaFileMarker(value)) {
+    const abs = absoluteFor(value.path, manifestDir);
+    const content = readSourceFile(abs, `luaFile("${value.path}")`);
+    consumed.add(abs);
+    return { content, origin: { kind: "file", absPath: abs } };
+  }
+  if (typeof value === "string") {
+    if (value === "") return undefined;
+    return { content: value, origin: { kind: "tag" } };
+  }
+  if (isFileMarker(value)) {
+    throw new Error(
+      `${label} must be a Lua source — got file(). Use luaFile() for Lua content.`,
+    );
+  }
+  throw new Error(`${label} must be a string or luaFile().`);
 }
 
 async function importTs(absPath: string): Promise<unknown> {

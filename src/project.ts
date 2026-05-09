@@ -18,6 +18,7 @@ export type IntegrationFolder = {
 
 export const INTEGRATIONS_DIR = "integrations";
 export const CUSTOM_APPS_DIR = "custom_apps";
+export const EDGE_APPS_DIR = "edge_apps";
 
 /**
  * Resolve a folder argument from the user's cwd to a manifest folder.
@@ -39,6 +40,7 @@ export function resolveIntegrationFolder(arg: string | undefined): IntegrationFo
   } else {
     candidates.push(resolve(cwd, INTEGRATIONS_DIR, arg));
     candidates.push(resolve(cwd, CUSTOM_APPS_DIR, arg));
+    candidates.push(resolve(cwd, EDGE_APPS_DIR, arg));
     candidates.push(resolve(cwd, arg));
   }
 

@@ -33,7 +33,7 @@ program
       "custom_apps/<handle>/. Defaults to a TypeScript manifest at engineVersion 2.",
   )
   .option(
-    "-t, --type <integration|app>",
+    "-t, --type <integration|app|edge>",
     "Kind of thing to scaffold",
     "integration",
   )
@@ -85,9 +85,9 @@ function parseFormat(raw: string): "ts" | "yaml" {
   throw new Error(`--format must be 'ts' or 'yaml' (got ${raw}).`);
 }
 
-function parseType(raw: string): "integration" | "app" {
-  if (raw === "integration" || raw === "app") return raw;
-  throw new Error(`--type must be 'integration' or 'app' (got ${raw}).`);
+function parseType(raw: string): "integration" | "app" | "edge" {
+  if (raw === "integration" || raw === "app" || raw === "edge") return raw;
+  throw new Error(`--type must be 'integration', 'app', or 'edge' (got ${raw}).`);
 }
 
 function parseAppKind(raw: string): "PAGE" | "DASHBOARD" | "KIOSK" | "JOB_VIEW" {
@@ -151,7 +151,11 @@ program
     "Materialize a remote integration draft into integrations/<short-name>/, " +
       "or a remote custom app's working copy into custom_apps/<handle>/.",
   )
-  .option("-t, --type <integration|app>", "Kind of thing to pull", "integration")
+  .option(
+    "-t, --type <integration|app|edge>",
+    "Kind of thing to pull",
+    "integration",
+  )
   .option("-v, --version <version>", "Specific draft version to pull (integrations only)")
   .option("-f, --force", "Overwrite if the target folder already exists", false)
   .option("--format <ts|yaml>", "Manifest format to emit (integrations only)", "ts")

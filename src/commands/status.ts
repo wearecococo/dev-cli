@@ -1,8 +1,10 @@
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
+  findEdgeAppDraft,
   getCustomAppByHandle,
   getDefinition,
   type CustomAppState,
+  type EdgeAppState,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { walkIntegrationFiles } from "../project.ts";
@@ -10,7 +12,11 @@ import { bundleToFiles } from "../bundle.ts";
 import { diffFiles, summarize, type FileDiff } from "../diff.ts";
 import { manifestEngineVersion, manifestFromGraphql } from "../manifest.ts";
 import { extractManifestSources, partitionFiles } from "../sources.ts";
-import type { LoadedCustomApp, LoadedIntegration } from "../loader.ts";
+import type {
+  LoadedCustomApp,
+  LoadedEdgeApp,
+  LoadedIntegration,
+} from "../loader.ts";
 import { findDefinition, loadLocal } from "./_shared.ts";
 
 export async function runStatus(
@@ -22,6 +28,10 @@ export async function runStatus(
 
   if (loaded.kind === "app") {
     await statusCustomApp(client, loaded);
+    return;
+  }
+  if (loaded.kind === "edge") {
+    await statusEdgeApp(client, loaded);
     return;
   }
   await statusIntegration(client, folder, loaded);
@@ -111,6 +121,82 @@ function printAppDiff(
 
 function pad(s: string, w: number): string {
   return s.length >= w ? s : s + " ".repeat(w - s.length);
+}
+
+async function statusEdgeApp(
+  client: GraphQLClient,
+  loaded: LoadedEdgeApp,
+): Promise<void> {
+  const { app } = loaded;
+  const remote = await findEdgeAppDraft(client, app.handle);
+  if (!remote) {
+    console.log(`edge app ${app.handle}: no remote row yet.`);
+    console.log(`  Run 'cococo push' to create the first DRAFT.`);
+    return;
+  }
+  if (remote.status !== "DRAFT") {
+    console.log(`edge app ${app.handle}: latest is ${remote.status} v${remote.version}.`);
+    console.log(`  'cococo push' will create a fresh DRAFT (a new monotonic version).`);
+    return;
+  }
+  printEdgeAppDiff(app, remote);
+}
+
+function printEdgeAppDiff(
+  local: { handlers: Array<{ name: string; source: string }>; triggers: Array<{ name: string; handler: string }>; libraries?: Array<{ name: string; source: string }>; on_message?: string },
+  remote: EdgeAppState,
+): void {
+  console.log(`edge app ${remote.handle} → ${remote.id} (DRAFT v${remote.version})`);
+
+  const localHandlers = new Map(local.handlers.map((h) => [h.name, h.source]));
+  const remoteHandlers = new Map(remote.handlers.map((h) => [h.name, h.source]));
+  const localLibs = new Map((local.libraries ?? []).map((l) => [l.name, l.source]));
+  const remoteLibs = new Map(remote.libraries.map((l) => [l.name, l.source]));
+
+  diffMap("handlers", localHandlers, remoteHandlers);
+  diffMap("libraries", localLibs, remoteLibs);
+
+  const localOnMsg = local.on_message ?? "";
+  const remoteOnMsg = remote.onMessage ?? "";
+  if (localOnMsg !== remoteOnMsg) {
+    console.log(`  onMessage: changed`);
+  }
+
+  const localTrigs = local.triggers.map((t) => `${t.name}→${t.handler}`).sort().join(",");
+  const remoteTrigs = remote.triggers
+    .map((t) => `${t.name}→${t.handler}`)
+    .sort()
+    .join(",");
+  if (localTrigs !== remoteTrigs) {
+    console.log(`  triggers: changed`);
+  }
+}
+
+function diffMap(
+  label: string,
+  local: Map<string, string>,
+  remote: Map<string, string>,
+): void {
+  const added: string[] = [];
+  const changed: string[] = [];
+  const deleted: string[] = [];
+  for (const [name, source] of local) {
+    if (!remote.has(name)) added.push(name);
+    else if (remote.get(name) !== source) changed.push(name);
+  }
+  for (const name of remote.keys()) {
+    if (!local.has(name)) deleted.push(name);
+  }
+  if (added.length === 0 && changed.length === 0 && deleted.length === 0) {
+    console.log(`  ${label}: unchanged (${local.size})`);
+    return;
+  }
+  console.log(
+    `  ${label}: +${added.length} ~${changed.length} -${deleted.length}`,
+  );
+  for (const n of added) console.log(`    + ${n}`);
+  for (const n of changed) console.log(`    ~ ${n}`);
+  for (const n of deleted) console.log(`    - ${n}`);
 }
 
 function printDiff(d: FileDiff, indent = "  "): void {

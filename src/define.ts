@@ -199,7 +199,7 @@ export type IntegrationDefinition = IntegrationV2;
  */
 const KIND_TAG = Symbol.for("@wearecococo/dev-cli/kind");
 
-export type ManifestKind = "integration" | "app";
+export type ManifestKind = "integration" | "app" | "edge";
 
 export type Tagged<T, K extends ManifestKind> = T & {
   readonly [KIND_TAG]: K;
@@ -208,7 +208,7 @@ export type Tagged<T, K extends ManifestKind> = T & {
 export function manifestKind(value: unknown): ManifestKind | undefined {
   if (value == null || typeof value !== "object") return undefined;
   const k = (value as Record<symbol, unknown>)[KIND_TAG];
-  return k === "integration" || k === "app" ? k : undefined;
+  return k === "integration" || k === "app" || k === "edge" ? k : undefined;
 }
 
 /**
@@ -261,6 +261,87 @@ export type CustomAppDefinition = CustomAppV2;
 
 export function defineCustomApp<T extends CustomAppV2>(spec: T): Tagged<T, "app"> {
   return Object.assign({}, spec, { [KIND_TAG]: "app" as const });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Edge apps. Authored under `edge_apps/<handle>/manifest.ts`. Identified
+// by handle, lifecycle DRAFT → PUBLISHED → DEPRECATED, with monotonic
+// Int versioning managed server-side. The CLI authors the DRAFT — push
+// upserts, publish flips DRAFT → PUBLISHED.
+// ──────────────────────────────────────────────────────────────────────
+
+export type EdgeAppLogLevel = "DEBUG" | "INFO" | "WARNING" | "ERROR" | "OFF";
+
+/**
+ * Discriminated union over the four trigger kinds. Each kind requires a
+ * shape-correct config (`schedule` for CRON, `path` for the file
+ * triggers) and the `handler` field is constrained by the generic to
+ * one of the keys you defined on `handlers`.
+ */
+export type EdgeAppTrigger<HandlerName extends string> =
+  | {
+      kind: "CRON";
+      name: string;
+      handler: HandlerName;
+      /** Cron expression, e.g. `"*\/5 * * * *"`. */
+      schedule: string;
+    }
+  | {
+      kind: "TAIL";
+      name: string;
+      handler: HandlerName;
+      /** Filesystem path of the file to tail. */
+      path: string;
+    }
+  | {
+      kind: "FILE_CREATED";
+      name: string;
+      handler: HandlerName;
+      path: string;
+      pattern?: string;
+    }
+  | {
+      kind: "FILE_DELETED";
+      name: string;
+      handler: HandlerName;
+      path: string;
+      pattern?: string;
+    };
+
+/**
+ * Author surface for an edge app. The `H` type parameter is inferred
+ * from the literal keys of `handlers` so `triggers[*].handler` only
+ * accepts handler names that exist on the spec — typos and renames
+ * surface as compile errors at edit time, not at push time.
+ */
+export type EdgeAppV2<H extends Record<string, LuaSource> = Record<string, LuaSource>> = {
+  /** URL-safe slug, unique per tenant. */
+  handle: string;
+  /** Human-readable display name. */
+  name: string;
+  description?: string;
+  /** Map of handler name → Lua source (`lua\`...\`` inline or `luaFile()`). */
+  handlers: H;
+  /** Trigger list — `handler` is statically constrained to a key in `handlers`. */
+  triggers: Array<EdgeAppTrigger<keyof H & string>>;
+  /** Reusable Lua snippets, loaded by handlers via `bridge.loadLib(name)`. */
+  libraries?: Record<string, LuaSource>;
+  /** Lua entry point fired by `local.edgeApp.invoke` from the cloud. */
+  onMessage?: LuaSource;
+  /** JSON Schema for installation variables. */
+  configSchema?: Record<string, unknown>;
+  /** Cloud-forwarding level for `bridge.log.*` calls. */
+  logLevel?: EdgeAppLogLevel;
+  /** Default true; flipping to false hides the app from installation pushes. */
+  isActive?: boolean;
+};
+
+export type EdgeAppDefinition = EdgeAppV2;
+
+export function defineEdgeApp<H extends Record<string, LuaSource>>(
+  spec: EdgeAppV2<H>,
+): Tagged<EdgeAppV2<H>, "edge"> {
+  return Object.assign({}, spec, { [KIND_TAG]: "edge" as const });
 }
 
 // ──────────────────────────────────────────────────────────────────────

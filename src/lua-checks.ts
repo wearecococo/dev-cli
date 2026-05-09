@@ -27,9 +27,9 @@ export type LuaCheckOrigin =
 
 /**
  * Build the full list of `LuaCheck`s for a folder. Dispatches on the
- * loaded manifest's kind — integrations and custom apps have different
- * source layouts and roles, but share the same `LuaCheck` shape so the
- * lint pipeline downstream is uniform.
+ * loaded manifest's kind — integrations, custom apps, and edge apps
+ * each have their own source layouts and roles, but share the same
+ * `LuaCheck` shape so the lint pipeline downstream is uniform.
  */
 export function collectLuaChecks(args: {
   loaded: LoadedManifest;
@@ -37,6 +37,7 @@ export function collectLuaChecks(args: {
   walkedFiles: ReadonlyMap<string, string>;
 }): LuaCheck[] {
   if (args.loaded.kind === "app") return collectAppLuaChecks(args);
+  if (args.loaded.kind === "edge") return collectEdgeLuaChecks(args);
   return collectIntegrationLuaChecks(args);
 }
 
@@ -132,6 +133,70 @@ function collectAppLuaChecks(args: {
   }
 
   return checks;
+}
+
+/**
+ * Edge-app checks. Every walked `.lua` file runs under `EDGE_APP`
+ * (handlers and libraries live in conventional sub-dirs but the role
+ * is uniform). Plus a manifest-origin check for any chunk inlined as
+ * a `lua\`...\`` template literal — the loader's
+ * `manifestSourceOrigins` map tells us which chunks those are.
+ */
+function collectEdgeLuaChecks(args: {
+  loaded: LoadedManifest;
+  folderPath: string;
+  walkedFiles: ReadonlyMap<string, string>;
+}): LuaCheck[] {
+  const { loaded, folderPath, walkedFiles } = args;
+  if (loaded.kind !== "edge") return [];
+  const checks: LuaCheck[] = [];
+
+  for (const [relPath, absPath] of walkedFiles) {
+    if (!relPath.endsWith(".lua")) continue;
+    const source = readFileSync(absPath, "utf8");
+    checks.push({
+      source,
+      role: "EDGE_APP",
+      scriptName: relPath,
+      origin: { kind: "file", relativePath: relPath, absPath },
+    });
+  }
+
+  // Inline tag-based chunks — the loader's wire shape carries the
+  // resolved source content; we look up the path → origin map and
+  // emit a manifest-origin check for any `kind: "tag"` entry.
+  const manifestPath = join(folderPath, MANIFEST_TS_FILENAME);
+  for (const [path, origin] of loaded.manifestSourceOrigins) {
+    if (origin.kind !== "tag") continue;
+    const source = readEdgeSourceAtPath(loaded.app, path);
+    if (!source) continue;
+    checks.push({
+      source,
+      role: "EDGE_APP",
+      scriptName: `manifest.ts:${path}`,
+      origin: { kind: "manifest", field: path, manifestPath },
+    });
+  }
+
+  return checks;
+}
+
+function readEdgeSourceAtPath(
+  app: { handlers: Array<{ name: string; source: string }>; libraries?: Array<{ name: string; source: string }>; on_message?: string },
+  path: string,
+): string | undefined {
+  if (path === "onMessage") return stringOrUndef(app.on_message);
+  const h = /^handlers\.(.+)$/.exec(path);
+  if (h) {
+    const found = app.handlers.find((x) => x.name === h[1]);
+    return found ? found.source : undefined;
+  }
+  const l = /^libraries\.(.+)$/.exec(path);
+  if (l && app.libraries) {
+    const found = app.libraries.find((x) => x.name === l[1]);
+    return found ? found.source : undefined;
+  }
+  return undefined;
 }
 
 /**

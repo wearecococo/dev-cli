@@ -1,8 +1,8 @@
 # @wearecococo/dev-cli
 
-Author cococo platform **integrations** and **custom apps** locally —
-TypeScript manifests, real Lua files, server-side validation, and a tight
-push / lint / publish loop.
+Author cococo platform **integrations**, **custom apps**, and **edge
+apps** locally — TypeScript manifests, real Lua files, server-side
+validation, and a tight push / lint / publish loop.
 
 ## Contents
 
@@ -11,6 +11,7 @@ push / lint / publish loop.
 - [Configuration](#configuration)
 - [Authoring an integration](#authoring-an-integration)
 - [Authoring a custom app](#authoring-a-custom-app)
+- [Authoring an edge app](#authoring-an-edge-app)
 - [Daily workflow](#daily-workflow)
 - [Migrating v1 integrations](#migrating-v1-integrations)
 - [Reference](#reference)
@@ -36,6 +37,11 @@ bunx cococo publish orders
 bunx cococo init job-board --type app
 bunx cococo push job-board
 bunx cococo publish job-board
+
+# …or an edge app
+bunx cococo init door-monitor --type edge
+bunx cococo push door-monitor
+bunx cococo publish door-monitor
 ```
 
 That's the whole loop: edit files, push, publish.
@@ -190,22 +196,105 @@ bunx cococo publish job-board    # snapshots + publishes in one step
 # → job-board: published v3 (cap_xyz)
 ```
 
-## Daily workflow
+## Authoring an edge app
 
-These commands work the same way for both integrations and custom apps —
-they dispatch by inspecting the manifest in the folder. Pass a folder
-name (resolved under `integrations/` *or* `custom_apps/`), a path, or
-omit the arg from inside the folder.
+Edge apps are tenant-scoped templates that get installed on **controllers**
+in the print shop — local hardware running the cococo bridge. They're
+identified by handle, follow a **DRAFT → PUBLISHED → DEPRECATED**
+lifecycle, and version with monotonic Ints managed by the platform.
 
 ```sh
-bunx cococo status orders               # diff local vs remote, read-only
-bunx cococo lint orders                 # validate every Lua chunk
-bunx cococo lint orders --strict        # warnings as errors (CI mode)
-bunx cococo push orders                 # mirror local → remote (runs lint first)
-bunx cococo publish orders              # validate + publish
-bunx cococo pull com.acme.orders        # download remote draft
-bunx cococo pull job-board --type app   # download custom-app working copy
-bunx cococo list                        # all integrations + apps on the server
+bunx cococo init door-monitor --type edge
+```
+
+Scaffolds:
+
+```
+edge_apps/door-monitor/
+├── manifest.ts
+└── handlers/
+    └── heartbeat.lua
+```
+
+The manifest is TypeScript with shape-checked triggers and handler refs:
+
+```ts
+import { defineEdgeApp, lua, luaFile } from "@wearecococo/dev-cli/define";
+
+export default defineEdgeApp({
+  handle: "door-monitor",
+  name: "Door Monitor",
+  description: "Watches a folder for door events",
+  logLevel: "INFO",
+
+  // Map of handler name → Lua source.
+  handlers: {
+    onDoor: luaFile("./handlers/onDoor.lua"),
+    heartbeat: luaFile("./handlers/heartbeat.lua"),
+  },
+
+  // Triggers reference handlers by name. Two compile-time guarantees:
+  //   1. `handler` is constrained to a key of `handlers` (no typos).
+  //   2. The shape required for each `kind` is enforced (CRON wants
+  //      `schedule`; FILE_CREATED wants `path`; etc).
+  triggers: [
+    { kind: "CRON",         name: "tick",    handler: "heartbeat",
+      schedule: "*/5 * * * *" },
+    { kind: "FILE_CREATED", name: "doorEvt", handler: "onDoor",
+      path: "/var/log/door", pattern: "*.evt" },
+  ],
+
+  // Reusable Lua loaded by handlers via `bridge.loadLib(name)`.
+  libraries: {
+    formatters: luaFile("./libraries/formatters.lua"),
+  },
+
+  // Lua entry for `local.edgeApp.invoke` cloud calls.
+  onMessage: lua`
+    local payload = ...
+    bridge.log.info("invoked: " .. payload.kind)
+  `,
+});
+```
+
+Trigger kinds: `CRON` (scheduled), `TAIL` (per-line file tail),
+`FILE_CREATED` / `FILE_DELETED` (file-watch with optional glob).
+
+Push upserts the DRAFT (one DRAFT per `(tenant, handle)`):
+
+```sh
+bunx cococo push door-monitor
+```
+
+Publish flips the DRAFT → PUBLISHED and auto-deprecates the prior
+PUBLISHED:
+
+```sh
+bunx cococo publish door-monitor
+# → door-monitor: published v3 (eaa_xyz). Prior PUBLISHED auto-deprecated.
+```
+
+Lua handlers / libraries / `onMessage` validate under the **`EDGE_APP`**
+role automatically — `bridge.*` APIs are visible, `ctx.integration.*`
+is not.
+
+## Daily workflow
+
+These commands work the same way for all three kinds — they dispatch by
+inspecting the manifest in the folder. Pass a folder name (resolved
+under `integrations/`, `custom_apps/`, or `edge_apps/`), a path, or omit
+the arg from inside the folder.
+
+```sh
+bunx cococo status orders                   # diff local vs remote, read-only
+bunx cococo lint orders                     # validate every Lua chunk
+bunx cococo lint orders --strict            # warnings as errors (CI mode)
+bunx cococo push orders                     # mirror local → remote (runs lint first)
+bunx cococo publish orders                  # validate + publish
+bunx cococo pull com.acme.orders            # download integration draft
+bunx cococo pull job-board --type app       # download custom-app working copy
+bunx cococo pull door-monitor --type edge   # download edge-app DRAFT
+bunx cococo list                            # all integrations + apps + edge apps
 ```
 
 ### Lua validation
@@ -216,9 +305,14 @@ folder:
 - **Files** — every `.lua` file walked.
 - **Inline snippets** — every `` lua`...` `` template literal on a TS
   manifest.
-- **Role-aware** — `app/**` and the custom-app `server.lua` validate
-  under `CUSTOM_APP`; everything else under `INTEGRATION`. The role
-  determines which `ctx.*` APIs are visible.
+- **Role-aware** —
+  - `INTEGRATION`: integration handlers, libraries, lifecycle hooks,
+    `scripts/*.lua` helpers.
+  - `CUSTOM_APP`: integration `app/**` and custom-app `server.lua`.
+  - `EDGE_APP`: everything in an `edge_apps/<handle>/` folder
+    (handlers, libraries, `onMessage`).
+  
+  The role determines which `ctx.*` / `bridge.*` APIs are visible.
 
 Diagnostics carry line, column, severity, and Luau error code:
 
@@ -281,12 +375,18 @@ on PATH, you get the skeleton plus a self-contained prompt at
 │       ├── config_schema.json             # optional
 │       ├── policy.yaml                    # optional
 │       └── workflows/*.yaml               # optional
-└── custom_apps/
-    └── <handle>/                          # one folder per custom app
+├── custom_apps/
+│   └── <handle>/                          # one folder per custom app
+│       ├── manifest.ts
+│       ├── template.vue
+│       ├── script.js
+│       └── server.lua                     # optional
+└── edge_apps/
+    └── <handle>/                          # one folder per edge app
         ├── manifest.ts
-        ├── template.vue
-        ├── script.js
-        └── server.lua                     # optional
+        ├── handlers/<name>.lua
+        ├── libraries/<name>.lua           # optional
+        └── onMessage.lua                  # optional
 ```
 
 ### Commands
@@ -295,13 +395,14 @@ on PATH, you get the skeleton plus a self-contained prompt at
 |---|---|
 | `cococo init <id>` | Scaffold an integration under `integrations/<short-name>/` |
 | `cococo init <handle> --type app` | Scaffold a custom app under `custom_apps/<handle>/` |
+| `cococo init <handle> --type edge` | Scaffold an edge app under `edge_apps/<handle>/` |
 | `cococo push [folder] [--strict]` | Mirror local → remote (runs lint first) |
 | `cococo status [folder]` | Diff local vs remote (read-only) |
 | `cococo lint [folder] [--strict]` | Validate every Lua chunk via the server |
 | `cococo validate [folder]` | Server-validate the remote draft (integrations only) |
-| `cococo publish [folder]` | Integrations: DRAFT → ACTIVE. Apps: snapshot + publish |
-| `cococo pull <id\|handle> [--type app] [-f]` | Download remote into a local folder |
-| `cococo list` | List all integrations and custom apps on the server |
+| `cococo publish [folder]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED) |
+| `cococo pull <id\|handle> [--type app\|edge] [-f]` | Download remote into a local folder |
+| `cococo list` | List integrations, custom apps, and edge apps on the server |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |
 | `cococo setup-mcp claude` | Register the cococo MCP endpoint with Claude Code |
 | `cococo mcp swagger <path>` | Run a stdio MCP server over an OpenAPI spec |

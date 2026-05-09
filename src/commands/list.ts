@@ -1,20 +1,29 @@
 import { createClient } from "../graphql/client.ts";
-import { listCustomApps, listDefinitions } from "../graphql/operations.ts";
+import {
+  listCustomApps,
+  listDefinitions,
+  listEdgeApps,
+  type EdgeAppState,
+} from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 
 export async function runList(overrides: ConfigOverrides): Promise<void> {
   const client = createClient(loadConfig(overrides));
 
-  const [drafts, active, deprecated, apps] = await Promise.all([
+  const [drafts, active, deprecated, apps, edgeDraft, edgePub] = await Promise.all([
     listDefinitions(client, { status: "DRAFT" }),
     listDefinitions(client, { status: "ACTIVE" }),
     listDefinitions(client, { status: "DEPRECATED" }),
     listCustomApps(client),
+    listEdgeApps(client, { status: "DRAFT" }),
+    listEdgeApps(client, { status: "PUBLISHED" }),
   ]);
 
   printIntegrations({ drafts, active, deprecated });
   console.log("");
   printCustomApps(apps);
+  console.log("");
+  printEdgeApps([...edgeDraft, ...edgePub]);
 }
 
 function printIntegrations(input: {
@@ -96,6 +105,45 @@ function printCustomApps(
         app.kind,
         10,
       )}  ${published}`,
+    );
+  }
+}
+
+function printEdgeApps(apps: EdgeAppState[]): void {
+  if (apps.length === 0) {
+    console.log("Edge apps: none.");
+    return;
+  }
+
+  // Group by handle so DRAFT and PUBLISHED versions for the same handle
+  // collapse to one row.
+  const byHandle = new Map<string, { draft?: EdgeAppState; published?: EdgeAppState }>();
+  for (const a of apps) {
+    const row = byHandle.get(a.handle) ?? {};
+    if (a.status === "DRAFT") row.draft = a;
+    else if (a.status === "PUBLISHED") row.published = a;
+    byHandle.set(a.handle, row);
+  }
+
+  const handles = Array.from(byHandle.keys()).sort();
+  const handleWidth = Math.max(14, ...handles.map((h) => h.length));
+  const nameWidth = Math.max(
+    10,
+    ...apps.map((a) => a.name.length),
+  );
+  const header = `${pad("EDGE APP", handleWidth)}  ${pad("NAME", nameWidth)}  ${pad(
+    "DRAFT",
+    8,
+  )}  PUBLISHED`;
+  console.log(header);
+  console.log("-".repeat(header.length));
+  for (const handle of handles) {
+    const row = byHandle.get(handle)!;
+    const name = (row.draft ?? row.published)!.name;
+    const draftCell = row.draft ? `v${row.draft.version}` : "-";
+    const publishedCell = row.published ? `v${row.published.version}` : "-";
+    console.log(
+      `${pad(handle, handleWidth)}  ${pad(name, nameWidth)}  ${pad(draftCell, 8)}  ${publishedCell}`,
     );
   }
 }

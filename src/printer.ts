@@ -5,7 +5,10 @@ import {
   timerHandlerPath,
 } from "./sources.ts";
 import type { WireManifest } from "./manifest.ts";
-import type { CustomAppKind } from "./graphql/operations.ts";
+import type {
+  CustomAppKind,
+  EdgeAppLogLevel,
+} from "./graphql/operations.ts";
 
 /**
  * Render a `WireManifest` as a `manifest.ts` source file.
@@ -219,3 +222,90 @@ function fileRef(path: string): FileRef {
 function isFileRef(x: unknown): x is FileRef {
   return typeof x === "object" && x !== null && (x as FileRef)[FILE_REF] === true;
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Edge-app printer. Emits a `defineEdgeApp({...})` manifest.ts with
+// `luaFile()` references for handlers / libraries / onMessage. Used by
+// `cococo init --type edge` and by `cococo pull --type edge`.
+// ──────────────────────────────────────────────────────────────────────
+
+export type EdgeAppPrintTrigger =
+  | { kind: "CRON"; name: string; handler: string; schedule: string }
+  | { kind: "TAIL"; name: string; handler: string; path: string }
+  | {
+      kind: "FILE_CREATED" | "FILE_DELETED";
+      name: string;
+      handler: string;
+      path: string;
+      pattern?: string;
+    };
+
+export type EdgeAppPrintInput = {
+  handle: string;
+  name: string;
+  description?: string;
+  logLevel?: EdgeAppLogLevel;
+  isActive?: boolean;
+  /** Each handler is materialised at the given relative path. */
+  handlers: Array<{ name: string; path: string }>;
+  /** Each library entry is materialised at the given relative path. */
+  libraries?: Array<{ name: string; path: string }>;
+  /** Set when the edge app has a non-empty onMessage entry. */
+  onMessagePath?: string;
+  /** Already a JSON-encoded string when present; will be `JSON.parse`d. */
+  configSchema?: unknown;
+  triggers: EdgeAppPrintTrigger[];
+};
+
+export function printEdgeAppManifestTs(input: EdgeAppPrintInput): string {
+  const body: Record<string, unknown> = {
+    handle: input.handle,
+    name: input.name,
+  };
+  if (input.description) body.description = input.description;
+  if (input.logLevel) body.logLevel = input.logLevel;
+  if (input.isActive === false) body.isActive = false;
+
+  body.triggers = input.triggers.map((t) => {
+    const out: Record<string, unknown> = {
+      kind: t.kind,
+      name: t.name,
+      handler: t.handler,
+    };
+    if (t.kind === "CRON") out.schedule = (t as { schedule: string }).schedule;
+    else {
+      out.path = (t as { path: string }).path;
+      const pat = (t as { pattern?: string }).pattern;
+      if (pat) out.pattern = pat;
+    }
+    return out;
+  });
+
+  const handlersBody: Record<string, unknown> = {};
+  for (const h of input.handlers) handlersBody[h.name] = luaFileRef(h.path);
+  body.handlers = handlersBody;
+
+  if (input.libraries && input.libraries.length > 0) {
+    const libs: Record<string, unknown> = {};
+    for (const l of input.libraries) libs[l.name] = luaFileRef(l.path);
+    body.libraries = libs;
+  }
+  if (input.onMessagePath) body.onMessage = luaFileRef(input.onMessagePath);
+  if (input.configSchema !== undefined && input.configSchema !== null) {
+    if (typeof input.configSchema === "string") {
+      try {
+        body.configSchema = JSON.parse(input.configSchema);
+      } catch {
+        // Drop malformed JSON rather than emit unparseable TS.
+      }
+    } else {
+      body.configSchema = input.configSchema;
+    }
+  }
+
+  return (
+    `import { defineEdgeApp, luaFile } from "@wearecococo/dev-cli/define";\n\n` +
+    `export default defineEdgeApp(${printObject(body, 0)});\n`
+  );
+}
+
