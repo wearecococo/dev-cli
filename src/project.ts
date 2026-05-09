@@ -1,6 +1,13 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { MANIFEST_FILENAME } from "./manifest.ts";
+import { MANIFEST_TS_FILENAME } from "./loader.ts";
+
+const MANIFEST_FILENAMES = [MANIFEST_TS_FILENAME, MANIFEST_FILENAME];
+
+function hasManifest(folder: string): boolean {
+  return MANIFEST_FILENAMES.some((f) => existsSync(join(folder, f)));
+}
 
 export type IntegrationFolder = {
   /** Absolute path to the integration folder. */
@@ -29,14 +36,12 @@ export function resolveIntegrationFolder(arg: string | undefined): IntegrationFo
   }
 
   for (const c of candidates) {
-    if (existsSync(join(c, MANIFEST_FILENAME))) {
-      return makeFolder(c);
-    }
+    if (hasManifest(c)) return makeFolder(c);
   }
 
   const tried = candidates.join(", ");
   throw new Error(
-    `Could not find ${MANIFEST_FILENAME}. Tried: ${tried}. ` +
+    `Could not find ${MANIFEST_TS_FILENAME} or ${MANIFEST_FILENAME}. Tried: ${tried}. ` +
       `Run from your monorepo root or pass a folder path.`,
   );
 }
@@ -70,7 +75,7 @@ function walk(dir: string, folder: IntegrationFolder, out: Map<string, string>):
       walk(abs, folder, out);
     } else if (st.isFile()) {
       const rel = folder.posixRelative(abs);
-      if (rel === MANIFEST_FILENAME) continue;
+      if (MANIFEST_FILENAMES.includes(rel)) continue;
       out.set(rel, abs);
     }
   }

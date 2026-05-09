@@ -7,7 +7,7 @@ export async function runValidate(
   folderArg: string | undefined,
   overrides: ConfigOverrides,
 ): Promise<void> {
-  const { manifest } = loadLocal(folderArg);
+  const { manifest } = await loadLocal(folderArg);
   const client = createClient(loadConfig(overrides));
 
   const def = await findDefinition(client, manifest.id, manifest.version);

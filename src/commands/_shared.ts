@@ -1,23 +1,32 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { MANIFEST_FILENAME, parseManifest, type WireManifest } from "../manifest.ts";
+import { loadManifest, type ManifestFormat } from "../loader.ts";
 import { resolveIntegrationFolder, type IntegrationFolder } from "../project.ts";
 import {
   listDefinitions,
   type IntegrationDefinition,
 } from "../graphql/operations.ts";
 import type { GraphQLClient } from "../graphql/client.ts";
+import type { WireManifest } from "../manifest.ts";
 
 export type LoadedIntegration = {
   folder: IntegrationFolder;
   manifest: WireManifest;
+  format: ManifestFormat;
+  /**
+   * Absolute paths consumed by `luaFile()` references on a TS manifest —
+   * push must NOT also upload these as bundle files. Empty for YAML.
+   */
+  consumed: Set<string>;
 };
 
-export function loadLocal(folderArg: string | undefined): LoadedIntegration {
+export async function loadLocal(folderArg: string | undefined): Promise<LoadedIntegration> {
   const folder = resolveIntegrationFolder(folderArg);
-  const manifestText = readFileSync(join(folder.path, MANIFEST_FILENAME), "utf8");
-  const manifest = parseManifest(manifestText);
-  return { folder, manifest };
+  const loaded = await loadManifest(folder.path);
+  return {
+    folder,
+    manifest: loaded.manifest,
+    format: loaded.format,
+    consumed: loaded.consumed,
+  };
 }
 
 export async function findDefinition(

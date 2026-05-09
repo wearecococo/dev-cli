@@ -2,38 +2,50 @@ import type { GraphQLClient } from "./client.ts";
 
 export type IntegrationDefinitionStatus = "DRAFT" | "ACTIVE" | "DEPRECATED";
 export type IntegrationRuntimeMode = "bundle" | "script_actor";
+export type EngineVersion = 1 | 2;
 
 export type FieldError = { path: string; message: string };
 
-export type IntegrationManifest = {
+type ResourceSpec = {
+  id: string;
+  type: string;
+  description?: string | null;
+  optional?: boolean | null;
+};
+
+type DataContainerSchemaSpec = {
+  name: string;
+  schema: string;
+  description?: string | null;
+  taggableTypes?: string[] | null;
+  maxPerInstance?: number | null;
+};
+
+type ActionSpec = {
+  name: string;
+  label: string;
+  description?: string | null;
+  scriptName: string;
+  configSchema?: string | null;
+  icon?: string | null;
+};
+
+type ManifestCommon = {
   id: string;
   version: string;
   sdkVersion: string;
   configSchema?: string | null;
-  resources: Array<{
-    id: string;
-    type: string;
-    description?: string | null;
-    optional?: boolean | null;
-  }>;
+  resources: ResourceSpec[];
   permissions: string[];
   description?: string | null;
-  dataContainerSchemas?: Array<{
-    name: string;
-    schema: string;
-    description?: string | null;
-    taggableTypes?: string[] | null;
-    maxPerInstance?: number | null;
-  }> | null;
-  actions?: Array<{
-    name: string;
-    label: string;
-    description?: string | null;
-    scriptName: string;
-    configSchema?: string | null;
-    icon?: string | null;
-  }> | null;
+  dataContainerSchemas?: DataContainerSchemaSpec[] | null;
+  actions?: ActionSpec[] | null;
   runtimeMode?: IntegrationRuntimeMode | null;
+  timeoutMs?: number | null;
+};
+
+/** Manifest shape for engineVersion 1: entry-script + exports-table dispatch. */
+export type IntegrationManifestV1 = ManifestCommon & {
   entryScript?: string | null;
   subscriptions?: Array<{ topic: string; filter?: string | null }> | null;
   timers?: Array<{
@@ -44,8 +56,30 @@ export type IntegrationManifest = {
   }> | null;
 };
 
-export type IntegrationBundle = {
-  manifest: IntegrationManifest;
+/** Manifest shape for engineVersion 2: per-handler inline source. */
+export type IntegrationManifestV2 = ManifestCommon & {
+  subscriptions?: Array<{
+    topic: string;
+    filter?: string | null;
+    source?: string | null;
+  }> | null;
+  timers?: Array<{
+    name: string;
+    every?: string | null;
+    cron?: string | null;
+    jitter?: string | null;
+    source?: string | null;
+  }> | null;
+  initSource?: string | null;
+  shutdownSource?: string | null;
+  upgradeSource?: string | null;
+  /** JSON-encoded map of name → Lua source. */
+  libraries?: string | null;
+};
+
+export type IntegrationManifest = IntegrationManifestV1 | IntegrationManifestV2;
+
+type BundleCommon = {
   configSchema?: string | null;
   policy?: string | null;
   scripts: string;
@@ -54,14 +88,29 @@ export type IntegrationBundle = {
   runtimeMode: IntegrationRuntimeMode;
 };
 
-export type IntegrationDefinition = {
+export type IntegrationBundleV1 = BundleCommon & { manifest: IntegrationManifestV1 };
+export type IntegrationBundleV2 = BundleCommon & { manifest: IntegrationManifestV2 };
+export type IntegrationBundle = IntegrationBundleV1 | IntegrationBundleV2;
+
+type DefinitionCommon = {
   id: string;
   integrationId: string;
   version: string;
   status: IntegrationDefinitionStatus;
   createdAt: string;
-  bundle?: IntegrationBundle;
 };
+
+export type IntegrationDefinitionV1 = DefinitionCommon & {
+  engineVersion: 1;
+  bundle?: IntegrationBundleV1;
+};
+
+export type IntegrationDefinitionV2 = DefinitionCommon & {
+  engineVersion: 2;
+  bundle?: IntegrationBundleV2;
+};
+
+export type IntegrationDefinition = IntegrationDefinitionV1 | IntegrationDefinitionV2;
 
 const DEFINITION_SUMMARY = `
   id
@@ -69,6 +118,7 @@ const DEFINITION_SUMMARY = `
   version
   status
   createdAt
+  engineVersion
 `;
 
 const DEFINITION_WITH_BUNDLE = `
@@ -77,6 +127,7 @@ const DEFINITION_WITH_BUNDLE = `
   version
   status
   createdAt
+  engineVersion
   bundle {
     manifest {
       id
@@ -89,9 +140,14 @@ const DEFINITION_WITH_BUNDLE = `
       dataContainerSchemas { name schema description taggableTypes maxPerInstance }
       actions { name label description scriptName configSchema icon }
       runtimeMode
+      timeoutMs
       entryScript
-      subscriptions { topic filter }
-      timers { name every cron jitter }
+      subscriptions { topic filter source }
+      timers { name every cron jitter source }
+      initSource
+      shutdownSource
+      upgradeSource
+      libraries
     }
     configSchema
     policy
@@ -145,7 +201,12 @@ export async function getDefinition(
 
 export async function createDraft(
   client: GraphQLClient,
-  input: { integrationId: string; version: string; runtimeMode?: IntegrationRuntimeMode },
+  input: {
+    integrationId: string;
+    version: string;
+    runtimeMode?: IntegrationRuntimeMode;
+    engineVersion?: EngineVersion;
+  },
 ): Promise<IntegrationDefinition> {
   const query = `
     mutation CreateIntegrationDraft($input: CreateIntegrationDraftInput!) {
@@ -202,22 +263,52 @@ export async function updateDraftFile(
 
 export type ValidationResult = { valid: boolean; errors: FieldError[] };
 
-export type ScriptValidationResult = { success: boolean; errors: FieldError[] };
+/**
+ * Roles understood by the Lua validator. The role determines which
+ * `ctx.*` APIs are visible — e.g. `ctx.integration.*` exists in
+ * INTEGRATION but not in CUSTOM_APP. EDGE_APP is recognised by the
+ * server but not yet emitted by this CLI; add it here once primitives
+ * stabilise.
+ */
+export type ValidateLuaRole = "INTEGRATION" | "CUSTOM_APP";
 
-export async function validateLuaScript(
+export type LuaSeverity = "ERROR" | "WARNING";
+
+export type LuaDiagnostic = {
+  line: number;
+  column: number;
+  severity: LuaSeverity;
+  message: string;
+  /** Luau error code (e.g. `LU0042`) when present; null for soft warnings. */
+  code?: string | null;
+};
+
+export type LuaValidationResult = {
+  success: boolean;
+  diagnostics: LuaDiagnostic[];
+};
+
+export async function validateLua(
   client: GraphQLClient,
-  script: string,
-): Promise<ScriptValidationResult> {
+  input: {
+    source: string;
+    role: ValidateLuaRole;
+    /** Surfaced verbatim in diagnostic headers. */
+    scriptName?: string;
+    /** When true, warnings count as failures. Defaults to false server-side. */
+    strict?: boolean;
+  },
+): Promise<LuaValidationResult> {
   const query = `
-    mutation ValidateLuaScript($script: String!) {
-      validateLuaScript(script: $script) { success errors { path message } }
+    query ValidateLua($input: ValidateLuaInput!) {
+      validateLua(input: $input) {
+        success
+        diagnostics { line column severity message code }
+      }
     }
   `;
-  const data = await client.request<{ validateLuaScript: ScriptValidationResult }>(
-    query,
-    { script },
-  );
-  return data.validateLuaScript;
+  const data = await client.request<{ validateLua: LuaValidationResult }>(query, { input });
+  return data.validateLua;
 }
 
 export async function validateDraft(

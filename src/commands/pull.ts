@@ -10,10 +10,14 @@ import {
   serializeManifest,
   shortName,
 } from "../manifest.ts";
+import { MANIFEST_TS_FILENAME, type ManifestFormat } from "../loader.ts";
+import { printManifestTs } from "../printer.ts";
+import { extractManifestSources } from "../sources.ts";
 
 export type PullOptions = {
   version?: string;
   force: boolean;
+  format?: ManifestFormat;
 };
 
 export async function runPull(
@@ -22,6 +26,7 @@ export async function runPull(
   overrides: ConfigOverrides,
 ): Promise<void> {
   const client = createClient(loadConfig(overrides));
+  const format: ManifestFormat = opts.format ?? "ts";
 
   const drafts = await listDefinitions(client, { integrationId, status: "DRAFT" });
   if (drafts.length === 0) {
@@ -52,21 +57,55 @@ export async function runPull(
   }
   mkdirSync(target, { recursive: true });
 
-  writeFileSync(
-    join(target, MANIFEST_FILENAME),
-    serializeManifest(manifestFromGraphql(full.bundle.manifest)),
-  );
+  const wireManifest = manifestFromGraphql(full.bundle.manifest, full.engineVersion);
 
-  const files = bundleToFiles(full.bundle);
+  if (format === "ts" && full.engineVersion === 1) {
+    throw new Error(
+      `${integrationId}@${chosen.version} is engineVersion 1 on the server, ` +
+        `and manifest.ts is v2-only. Re-run with '--format yaml' to pull this ` +
+        `as a YAML manifest.`,
+    );
+  }
+
+  // For TS: materialise every source to disk, and emit a manifest.ts that
+  // references each via luaFile(). The wire manifest is left intact so the
+  // printer can map each source field to its conventional handler path.
+  // For YAML: extract sources, write the stripped manifest as manifest.yaml,
+  // and write the source files alongside.
+  if (format === "ts") {
+    writeFileSync(join(target, MANIFEST_TS_FILENAME), printManifestTs(wireManifest));
+    const { files: sourceFiles } = extractManifestSources(wireManifest);
+    writeMaterialised(target, sourceFiles);
+    const bundleFiles = bundleToFiles(full.bundle);
+    writeMaterialised(target, bundleFiles);
+    const total = bundleFiles.size + sourceFiles.size + 1;
+    console.log(
+      `Pulled ${integrationId}@${chosen.version} into integrations/${shortName(
+        integrationId,
+      )}/ (${total} file(s); manifest.ts + ${sourceFiles.size} v2 source file(s))`,
+    );
+    return;
+  }
+
+  const { stripped, files: sourceFiles } = extractManifestSources(wireManifest);
+  writeFileSync(join(target, MANIFEST_FILENAME), serializeManifest(stripped));
+  const bundleFiles = bundleToFiles(full.bundle);
+  writeMaterialised(target, bundleFiles);
+  writeMaterialised(target, sourceFiles);
+  const totalFiles = bundleFiles.size + sourceFiles.size + 1;
+  console.log(
+    `Pulled ${integrationId}@${chosen.version} into integrations/${shortName(
+      integrationId,
+    )}/ (${totalFiles} file(s); manifest.yaml + ${sourceFiles.size} v2 source file(s))`,
+  );
+}
+
+function writeMaterialised(target: string, files: Map<string, string>): void {
   for (const [path, content] of files) {
     const abs = join(target, path);
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, content);
   }
-
-  console.log(
-    `Pulled ${integrationId}@${chosen.version} into integrations/${shortName(integrationId)}/ (${files.size} file(s))`,
-  );
 }
 
 function compareVersions(a: string, b: string): number {

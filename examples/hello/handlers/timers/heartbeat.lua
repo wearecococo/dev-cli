@@ -1,0 +1,3 @@
+local name, config = ...
+
+ctx.log.info("heartbeat tick")

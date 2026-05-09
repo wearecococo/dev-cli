@@ -6,6 +6,10 @@
   "bin": {
     "cococo": "src/index.ts"
   },
+  "exports": {
+    ".": "./src/index.ts",
+    "./define": "./src/define.ts"
+  },
   "files": [
     "src",
     "tsconfig.json",

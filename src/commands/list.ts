@@ -23,9 +23,11 @@ export async function runList(overrides: ConfigOverrides): Promise<void> {
     }
     return row;
   };
-  for (const d of drafts) ensure(d.integrationId).drafts.push(d.version);
-  for (const d of active) ensure(d.integrationId).active.push(d.version);
-  for (const d of deprecated) ensure(d.integrationId).deprecated.push(d.version);
+  const tag = (version: string, engineVersion: number) => `${version} (v${engineVersion})`;
+  for (const d of drafts) ensure(d.integrationId).drafts.push(tag(d.version, d.engineVersion));
+  for (const d of active) ensure(d.integrationId).active.push(tag(d.version, d.engineVersion));
+  for (const d of deprecated)
+    ensure(d.integrationId).deprecated.push(tag(d.version, d.engineVersion));
 
   if (grouped.size === 0) {
     console.log("No integration definitions found.");
@@ -34,15 +36,19 @@ export async function runList(overrides: ConfigOverrides): Promise<void> {
 
   const ids = Array.from(grouped.keys()).sort();
   const idWidth = Math.max(14, ...ids.map((s) => s.length));
-  const header = `${pad("INTEGRATION", idWidth)}  ${pad("DRAFT", 12)}  ${pad("ACTIVE", 12)}  DEPRECATED`;
+  const colWidth = 18;
+  const header = `${pad("INTEGRATION", idWidth)}  ${pad("DRAFT", colWidth)}  ${pad(
+    "ACTIVE",
+    colWidth,
+  )}  DEPRECATED`;
   console.log(header);
   console.log("-".repeat(header.length));
   for (const id of ids) {
     const row = grouped.get(id)!;
     console.log(
-      `${pad(id, idWidth)}  ${pad(row.drafts.join(",") || "-", 12)}  ${pad(
+      `${pad(id, idWidth)}  ${pad(row.drafts.join(",") || "-", colWidth)}  ${pad(
         row.active.join(",") || "-",
-        12,
+        colWidth,
       )}  ${row.deprecated.join(",") || "-"}`,
     );
   }

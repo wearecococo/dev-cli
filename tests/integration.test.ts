@@ -7,6 +7,7 @@ import {
 } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -80,21 +81,30 @@ describe.skipIf(!ENABLED)("end-to-end against real server", () => {
   test("full lifecycle", async () => {
     const apiOpts = {};
 
-    // 1. init scaffolds the folder.
-    await runInit(stableId, { version: "0.1.0" });
+    // 1. init scaffolds the folder. We pin --format yaml here because this
+    //    end-to-end test exercises the YAML path explicitly via parseManifest
+    //    / serializeManifest. The TS path has its own unit-test coverage in
+    //    tests/loader.test.ts + tests/printer.test.ts.
+    await runInit(stableId, { version: "0.1.0", format: "yaml" });
     const folderPath = join(scratchA, "integrations", expectedFolder);
     expect(existsSync(join(folderPath, MANIFEST_FILENAME))).toBe(true);
-    expect(existsSync(join(folderPath, "scripts/main.lua"))).toBe(true);
+    expect(existsSync(join(folderPath, "handlers/timers/heartbeat.lua"))).toBe(true);
+    const initialManifest = parseManifest(
+      readFileSync(join(folderPath, MANIFEST_FILENAME), "utf8"),
+    );
+    expect((initialManifest as any).engine_version).toBe(2);
 
-    // 2a. lint runs cleanly on the starter scaffold.
+    // 2a. lint runs cleanly on the starter scaffold (handler files are
+    //     ordinary .lua files, picked up by the existing walker).
     await runLint(expectedFolder, apiOpts);
 
     // 2b. push fails when Lua syntax is broken (pre-push lint catches it).
-    const mainLua = join(folderPath, "scripts/main.lua");
-    const goodLua = readFileSync(mainLua, "utf8");
-    writeFileSync(mainLua, "this is not lua\n");
+    //     Break the heartbeat handler to trip the lint gate, then restore.
+    const heartbeat = join(folderPath, "handlers", "timers", "heartbeat.lua");
+    const goodLua = readFileSync(heartbeat, "utf8");
+    writeFileSync(heartbeat, "this is not lua\n");
     await expect(runPush(expectedFolder, apiOpts)).rejects.toThrow(/failed validation/i);
-    writeFileSync(mainLua, goodLua);
+    writeFileSync(heartbeat, goodLua);
 
     // 2c. push creates a draft.
     await runPush(expectedFolder, apiOpts);
@@ -114,6 +124,7 @@ describe.skipIf(!ENABLED)("end-to-end against real server", () => {
     await runStatus(expectedFolder, apiOpts);
 
     // 4. add a file locally and push again → upload propagates.
+    mkdirSync(join(folderPath, "scripts"), { recursive: true });
     writeFileSync(join(folderPath, "scripts/util.lua"), "-- util\nreturn {}");
     await runPush(expectedFolder, apiOpts);
 
@@ -147,9 +158,14 @@ describe.skipIf(!ENABLED)("end-to-end against real server", () => {
     });
     expect(drafts.find((d) => d.version === "0.1.1")).toBeDefined();
 
-    // 10. pull the new draft into a fresh scratch dir.
+    // 10. pull the new draft into a fresh scratch dir, in YAML format to
+    //     match the parseManifest assertions below.
     process.chdir(scratchB);
-    await runPull(stableId, { version: "0.1.1", force: false }, apiOpts);
+    await runPull(
+      stableId,
+      { version: "0.1.1", force: false, format: "yaml" },
+      apiOpts,
+    );
     const pulledManifest = parseManifest(
       readFileSync(
         join(scratchB, "integrations", expectedFolder, MANIFEST_FILENAME),
@@ -158,6 +174,15 @@ describe.skipIf(!ENABLED)("end-to-end against real server", () => {
     );
     expect(pulledManifest.id).toBe(stableId);
     expect(pulledManifest.version).toBe("0.1.1");
+    expect((pulledManifest as any).engine_version).toBe(2);
+    // Pull materialised the heartbeat handler back to disk and stripped the
+    // inline source from the manifest.
+    expect(
+      existsSync(
+        join(scratchB, "integrations", expectedFolder, "handlers/timers/heartbeat.lua"),
+      ),
+    ).toBe(true);
+    expect((pulledManifest as any).timers[0].source).toBeUndefined();
 
     // Restore cwd for any later tests.
     process.chdir(scratchA);
