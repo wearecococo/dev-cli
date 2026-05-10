@@ -151,8 +151,9 @@ program
 program
   .command("apply")
   .description(
-    "Apply tenant-IAM ops files (users.ts, iam_policies.ts, bindings.ts) at the repo root. " +
-      "Additive: upserts what's declared, never deletes. Use 'cococo delete' for removals.",
+    "Apply tenant ops files (users.ts, iam_policies.ts, bindings.ts, networks.ts, devices.ts) " +
+      "at the repo root. Additive: upserts what's declared, never deletes. " +
+      "Use 'cococo delete' for removals.",
   )
   .action(async () => {
     await runApply(apiOpts());
@@ -161,13 +162,17 @@ program
 program
   .command("delete <kind> [args...]")
   .description(
-    "Delete a tenant-IAM resource on the server: user (by email), policy (by handle), " +
-      "or binding (by email + policy-handle). Local ops files are NOT edited — " +
-      "remove the entry yourself to keep the next apply consistent.",
+    "Delete a tenant ops resource on the server. Kinds: user (<email>), " +
+      "policy (<handle>), binding (<email> <policy-handle>), network (<name>), " +
+      "device (<identifier>). Local ops files are NOT edited — remove the " +
+      "entry yourself to keep the next apply consistent.",
   )
   .action(async (kind: string, args: string[]) => {
-    if (kind !== "user" && kind !== "policy" && kind !== "binding") {
-      throw new Error(`cococo delete: unknown kind '${kind}'. Use user | policy | binding.`);
+    const allowed = ["user", "policy", "binding", "network", "device"] as const;
+    if (!allowed.includes(kind as (typeof allowed)[number])) {
+      throw new Error(
+        `cococo delete: unknown kind '${kind}'. Use ${allowed.join(" | ")}.`,
+      );
     }
     await runDelete(kind as DeleteKind, args, apiOpts());
   });

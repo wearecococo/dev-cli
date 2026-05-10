@@ -2,21 +2,33 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   manifestKind,
-  type BindingSpec,
-  type IAMPolicySpec,
-  type UserSpec,
+  type Binding,
+  type Device,
+  type IAMPolicy,
+  type Network,
+  type User,
 } from "./define.ts";
 
 export const USERS_FILENAME = "users.ts";
 export const POLICIES_FILENAME = "iam_policies.ts";
 export const BINDINGS_FILENAME = "bindings.ts";
+export const NETWORKS_FILENAME = "networks.ts";
+export const DEVICES_FILENAME = "devices.ts";
 
 export type LoadedOps = {
   /** Absolute paths to the files that were loaded. */
-  files: { users?: string; policies?: string; bindings?: string };
-  users: UserSpec[];
-  policies: IAMPolicySpec[];
-  bindings: BindingSpec[];
+  files: {
+    users?: string;
+    policies?: string;
+    bindings?: string;
+    networks?: string;
+    devices?: string;
+  };
+  users: User[];
+  policies: IAMPolicy[];
+  bindings: Binding[];
+  networks: Network[];
+  devices: Device[];
 };
 
 /**
@@ -35,8 +47,17 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
   const usersPath = resolve(repoRoot, USERS_FILENAME);
   const policiesPath = resolve(repoRoot, POLICIES_FILENAME);
   const bindingsPath = resolve(repoRoot, BINDINGS_FILENAME);
+  const networksPath = resolve(repoRoot, NETWORKS_FILENAME);
+  const devicesPath = resolve(repoRoot, DEVICES_FILENAME);
 
-  const out: LoadedOps = { files: {}, users: [], policies: [], bindings: [] };
+  const out: LoadedOps = {
+    files: {},
+    users: [],
+    policies: [],
+    bindings: [],
+    networks: [],
+    devices: [],
+  };
 
   if (existsSync(usersPath)) {
     out.users = await loadList(usersPath, "users", "users");
@@ -50,15 +71,26 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     out.bindings = await loadList(bindingsPath, "bindings", "bindings");
     out.files.bindings = bindingsPath;
   }
+  if (existsSync(networksPath)) {
+    out.networks = await loadList(networksPath, "networks", "networks");
+    out.files.networks = networksPath;
+  }
+  if (existsSync(devicesPath)) {
+    out.devices = await loadList(devicesPath, "devices", "devices");
+    out.files.devices = devicesPath;
+  }
 
   validateNoDuplicates(out);
   return out;
 }
 
+type OpsKind = "users" | "iam_policies" | "bindings" | "networks" | "devices";
+type OpsField = "users" | "policies" | "bindings" | "networks" | "devices";
+
 async function loadList<T>(
   absPath: string,
-  expectedKind: "users" | "iam_policies" | "bindings",
-  field: "users" | "policies" | "bindings",
+  expectedKind: OpsKind,
+  field: OpsField,
 ): Promise<T[]> {
   const url = `${absPath}?t=${Date.now()}`;
   const mod = await import(url);
@@ -82,10 +114,12 @@ async function loadList<T>(
   return list as T[];
 }
 
-function expectedKindHelper(kind: "users" | "iam_policies" | "bindings"): string {
+function expectedKindHelper(kind: OpsKind): string {
   if (kind === "users") return "Users";
   if (kind === "iam_policies") return "IAMPolicies";
-  return "Bindings";
+  if (kind === "bindings") return "Bindings";
+  if (kind === "networks") return "Networks";
+  return "Devices";
 }
 
 function validateNoDuplicates(ops: LoadedOps): void {
@@ -116,5 +150,23 @@ function validateNoDuplicates(ops: LoadedOps): void {
       );
     }
     seenBindings.add(key);
+  }
+  const seenNetworks = new Set<string>();
+  for (const n of ops.networks) {
+    if (seenNetworks.has(n.name)) {
+      throw new Error(
+        `Duplicate network name '${n.name}' in networks.ts. Name is the natural key.`,
+      );
+    }
+    seenNetworks.add(n.name);
+  }
+  const seenDevices = new Set<string>();
+  for (const d of ops.devices) {
+    if (seenDevices.has(d.identifier)) {
+      throw new Error(
+        `Duplicate device identifier '${d.identifier}' in devices.ts. Identifier is the natural key.`,
+      );
+    }
+    seenDevices.add(d.identifier);
   }
 }

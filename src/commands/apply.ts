@@ -2,18 +2,33 @@ import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   attachPolicy,
   createIAMPolicy,
+  getDeviceByIdentifier,
   getIAMPolicy,
+  getNetworkByName,
   getUserByEmail,
   listUserPolicies,
   updateIAMPolicy,
+  upsertDevice,
+  upsertNetwork,
   upsertUser,
   type IAMDocument,
   type IAMPolicyState,
+  type InboundProtocolConfig,
+  type NetworkState,
+  type OutboundProtocolConfig,
   type UserState,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { loadOps, type LoadedOps } from "../ops.ts";
-import type { BindingSpec, IAMPolicySpec, UserSpec } from "../define.ts";
+import type {
+  Binding,
+  Device,
+  IAMPolicy,
+  InboundProtocol,
+  Network,
+  OutboundProtocol,
+  User,
+} from "../define.ts";
 
 /**
  * Apply tenant-config "ops" files (users.ts / iam_policies.ts /
@@ -28,13 +43,10 @@ import type { BindingSpec, IAMPolicySpec, UserSpec } from "../define.ts";
  */
 export async function runApply(overrides: ConfigOverrides): Promise<void> {
   const ops = await loadOps(process.cwd());
-  if (
-    ops.files.users === undefined &&
-    ops.files.policies === undefined &&
-    ops.files.bindings === undefined
-  ) {
+  if (Object.values(ops.files).every((v) => v === undefined)) {
     console.log(
-      `No ops files found in ${process.cwd()}. Expected one of: users.ts, iam_policies.ts, bindings.ts.`,
+      `No ops files found in ${process.cwd()}. Expected one of: ` +
+        `users.ts, iam_policies.ts, bindings.ts, networks.ts, devices.ts.`,
     );
     return;
   }
@@ -43,13 +55,15 @@ export async function runApply(overrides: ConfigOverrides): Promise<void> {
   const policiesById = await applyPolicies(client, ops.policies);
   const usersByEmail = await applyUsers(client, ops.users);
   await applyBindings(client, ops.bindings, usersByEmail, policiesById, ops);
+  const networksByName = await applyNetworks(client, ops.networks);
+  await applyDevices(client, ops.devices, networksByName, ops);
 
   reportSummary(ops);
 }
 
 async function applyPolicies(
   client: GraphQLClient,
-  policies: IAMPolicySpec[],
+  policies: IAMPolicy[],
 ): Promise<Map<string, IAMPolicyState>> {
   const out = new Map<string, IAMPolicyState>();
   for (const p of policies) {
@@ -87,7 +101,7 @@ async function applyPolicies(
 
 async function applyUsers(
   client: GraphQLClient,
-  users: UserSpec[],
+  users: User[],
 ): Promise<Map<string, UserState>> {
   const out = new Map<string, UserState>();
   for (const u of users) {
@@ -118,7 +132,7 @@ async function applyUsers(
  */
 async function applyBindings(
   client: GraphQLClient,
-  bindings: BindingSpec[],
+  bindings: Binding[],
   usersByEmail: Map<string, UserState>,
   policiesByHandle: Map<string, IAMPolicyState>,
   ops: LoadedOps,
@@ -196,10 +210,133 @@ async function resolverFor<T>(
   return out;
 }
 
+async function applyNetworks(
+  client: GraphQLClient,
+  networks: Network[],
+): Promise<Map<string, NetworkState>> {
+  const out = new Map<string, NetworkState>();
+  for (const n of networks) {
+    const existing = await getNetworkByName(client, n.name);
+    const result = await upsertNetwork(client, {
+      id: existing?.id,
+      name: n.name,
+      description: n.description,
+    });
+    console.log(`  network ${existing ? "~" : "+"} ${n.name}`);
+    out.set(n.name, result);
+  }
+  return out;
+}
+
+/**
+ * Apply devices. `network` is a name reference resolved either against
+ * the locally-declared networks (just upserted) or via a server lookup.
+ * Refs that don't resolve fail loudly — same belt-and-braces check the
+ * binding pass uses.
+ */
+async function applyDevices(
+  client: GraphQLClient,
+  devices: Device[],
+  networksByName: Map<string, NetworkState>,
+  ops: LoadedOps,
+): Promise<void> {
+  for (const d of devices) {
+    let networkId: string | undefined;
+    if (d.network !== undefined) {
+      const local = networksByName.get(d.network);
+      if (local) {
+        networkId = local.id;
+      } else {
+        const remote = await getNetworkByName(client, d.network);
+        if (!remote) {
+          throw new Error(
+            `Device '${d.identifier}' references network '${d.network}' that doesn't exist ` +
+              `locally${ops.files.networks ? ` in ${ops.files.networks}` : ""} or on the server.`,
+          );
+        }
+        networkId = remote.id;
+      }
+    }
+
+    const existing = await getDeviceByIdentifier(client, d.identifier);
+    await upsertDevice(client, {
+      id: existing?.id,
+      identifier: d.identifier,
+      networkId,
+      name: d.name,
+      description: d.description,
+      deviceType: d.deviceType,
+      manufacturer: d.manufacturer,
+      model: d.model,
+      serialNumber: d.serialNumber,
+      isActive: d.isActive,
+      outboundProtocols: d.outboundProtocols?.map(toOutboundWire),
+      inboundProtocols: d.inboundProtocols?.map(toInboundWire),
+    });
+    const netNote = d.network ? ` → ${d.network}` : "";
+    console.log(`  device ${existing ? "~" : "+"} ${d.identifier}${netNote}`);
+  }
+}
+
+/**
+ * Flatten a discriminated outbound-protocol spec into the wire shape.
+ * The wire type has every per-kind field as optional; the author API
+ * has them required-when-applicable. We rely on the discriminator to
+ * pick the right fields rather than emitting nulls for non-applicable
+ * ones — the server treats absent and null-valued fields the same.
+ */
+function toOutboundWire(p: OutboundProtocol): OutboundProtocolConfig {
+  if (p.kind === "HTTP") {
+    return {
+      kind: "HTTP",
+      label: p.label,
+      url: p.url,
+      authMode: p.authMode,
+      username: p.username,
+      password: p.password,
+    };
+  }
+  if (p.kind === "JMF") {
+    return { kind: "JMF", label: p.label, url: p.url };
+  }
+  if (p.kind === "MQTT") {
+    return {
+      kind: "MQTT",
+      label: p.label,
+      url: p.url,
+      topic: p.topic,
+      authMode: p.authMode,
+      username: p.username,
+      password: p.password,
+    };
+  }
+  return {
+    kind: "SQL",
+    label: p.label,
+    adapter: p.adapter,
+    url: p.url,
+    host: p.host,
+    port: p.port,
+    databaseName: p.databaseName,
+    username: p.username,
+    password: p.password,
+    connectionString: p.connectionString,
+  };
+}
+
+function toInboundWire(p: InboundProtocol): InboundProtocolConfig {
+  if (p.kind === "MQTT") {
+    return { kind: "MQTT", label: p.label, topic: p.topic };
+  }
+  return { kind: "HTTP", label: p.label, webhookPath: p.webhookPath };
+}
+
 function reportSummary(ops: LoadedOps): void {
   const parts: string[] = [];
   if (ops.users.length > 0) parts.push(`${ops.users.length} user(s)`);
   if (ops.policies.length > 0) parts.push(`${ops.policies.length} polic${ops.policies.length === 1 ? "y" : "ies"}`);
   if (ops.bindings.length > 0) parts.push(`${ops.bindings.length} binding(s)`);
+  if (ops.networks.length > 0) parts.push(`${ops.networks.length} network(s)`);
+  if (ops.devices.length > 0) parts.push(`${ops.devices.length} device(s)`);
   console.log(`Applied ${parts.join(", ")}.`);
 }

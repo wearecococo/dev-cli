@@ -127,12 +127,22 @@ export function file(path: string): string {
 // module, so the author bundle stays light.
 import type {
   CustomAppKind,
+  DatabaseAdapter,
+  DeviceAuthMode,
   EdgeAppLogLevel,
   Effect,
   RuntimeMode,
   UserKind,
 } from "./graphql/operations.ts";
-export type { CustomAppKind, EdgeAppLogLevel, Effect, RuntimeMode, UserKind };
+export type {
+  CustomAppKind,
+  DatabaseAdapter,
+  DeviceAuthMode,
+  EdgeAppLogLevel,
+  Effect,
+  RuntimeMode,
+  UserKind,
+};
 
 export type ResourceSpec = {
   id: string;
@@ -216,7 +226,9 @@ export type ManifestKind =
   | "edge"
   | "users"
   | "iam_policies"
-  | "bindings";
+  | "bindings"
+  | "networks"
+  | "devices";
 
 export type Tagged<T, K extends ManifestKind> = T & {
   readonly [KIND_TAG]: K;
@@ -230,7 +242,9 @@ export function manifestKind(value: unknown): ManifestKind | undefined {
     k === "edge" ||
     k === "users" ||
     k === "iam_policies" ||
-    k === "bindings"
+    k === "bindings" ||
+    k === "networks" ||
+    k === "devices"
     ? k
     : undefined;
 }
@@ -581,7 +595,7 @@ export function defineEdgeApp<H extends Record<string, LuaSource>>(
  * A user account. `email` is the natural key (unique per tenant) — the
  * loader uses it to resolve to a server-side `UserID` when pushing.
  */
-export type UserSpec = {
+export type User = {
   email: string;
   name?: string;
   kind?: UserKind;
@@ -602,7 +616,7 @@ export type IAMStatement = {
  * as the policy's custom ID so the manifest survives create/update
  * cycles without recording server-generated IDs.
  */
-export type IAMPolicySpec = {
+export type IAMPolicy = {
   handle: string;
   name: string;
   description?: string;
@@ -611,31 +625,130 @@ export type IAMPolicySpec = {
 
 /**
  * A user → policy attachment. Both ends reference the natural key:
- * `user` is an email (matches `UserSpec.email`), `policy` is a handle
- * (matches `IAMPolicySpec.handle`). The loader cross-checks the refs
+ * `user` is an email (matches `User.email`), `policy` is a handle
+ * (matches `IAMPolicy.handle`). The loader cross-checks the refs
  * against the same manifest's users/policies — pushing a binding for a
  * user or policy that isn't declared locally only resolves if the row
  * already exists on the server.
  */
-export type BindingSpec = {
+export type Binding = {
   user: string;
   policy: string;
 };
 
-export function defineUsers(users: UserSpec[]): Tagged<{ users: UserSpec[] }, "users"> {
+export function defineUsers(users: User[]): Tagged<{ users: User[] }, "users"> {
   return Object.assign({}, { users }, { [KIND_TAG]: "users" as const });
 }
 
 export function defineIAMPolicies(
-  policies: IAMPolicySpec[],
-): Tagged<{ policies: IAMPolicySpec[] }, "iam_policies"> {
+  policies: IAMPolicy[],
+): Tagged<{ policies: IAMPolicy[] }, "iam_policies"> {
   return Object.assign({}, { policies }, { [KIND_TAG]: "iam_policies" as const });
 }
 
 export function defineBindings(
-  bindings: BindingSpec[],
-): Tagged<{ bindings: BindingSpec[] }, "bindings"> {
+  bindings: Binding[],
+): Tagged<{ bindings: Binding[] }, "bindings"> {
   return Object.assign({}, { bindings }, { [KIND_TAG]: "bindings" as const });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Networks + Devices. Networks group IoT controllers, devices, and
+// databases. Devices belong to a network (optional) and carry inbound
+// + outbound protocol configs. Authored as `networks.ts` / `devices.ts`
+// at the repo root, applied additively.
+//
+// Protocol configs are discriminated unions over `kind` so the author
+// API only allows fields that apply to that kind (HTTP wants `url`,
+// SQL wants `host`/`adapter`/`databaseName`, MQTT wants `topic`, …) —
+// a typo or wrong-field combo is a compile error, not a server reject.
+// ──────────────────────────────────────────────────────────────────────
+
+export type Network = {
+  /** Natural key — pushed as the network's name. */
+  name: string;
+  description?: string;
+};
+
+/**
+ * Outbound protocol — the device-side endpoint the platform writes to
+ * (HTTP REST, SQL inserts, MQTT publishes, JMF). Fields per kind are
+ * disjoint so the type system rejects e.g. `kind: "HTTP"` with a `host`.
+ */
+export type OutboundProtocol =
+  | {
+      kind: "HTTP";
+      label?: string;
+      /** Endpoint URL (required for HTTP). */
+      url: string;
+      authMode?: DeviceAuthMode;
+      username?: string;
+      /** Plaintext or `${config:NAME}` template. Write-only on the server. */
+      password?: string;
+    }
+  | {
+      kind: "JMF";
+      label?: string;
+      url: string;
+    }
+  | {
+      kind: "MQTT";
+      label?: string;
+      url: string;
+      topic: string;
+      authMode?: DeviceAuthMode;
+      username?: string;
+      password?: string;
+    }
+  | {
+      kind: "SQL";
+      label?: string;
+      adapter: DatabaseAdapter;
+      /** SQLite uses `url` as the file path; the others use host/port/databaseName. */
+      url?: string;
+      host?: string;
+      port?: number;
+      databaseName?: string;
+      username?: string;
+      password?: string;
+      /** Write-only override for explicit connection strings. */
+      connectionString?: string;
+    };
+
+/**
+ * Inbound protocol — the platform-side endpoint that listens for
+ * messages from the device (MQTT subscribe, HTTP webhook receive).
+ */
+export type InboundProtocol =
+  | { kind: "MQTT"; label?: string; topic: string }
+  | { kind: "HTTP"; label?: string; webhookPath: string };
+
+export type Device = {
+  /** Natural key — pushed as the device's identifier (unique per tenant). */
+  identifier: string;
+  /** Network reference by `name` (matches `Network.name`). Optional. */
+  network?: string;
+  name?: string;
+  description?: string;
+  deviceType?: string;
+  manufacturer?: string;
+  model?: string;
+  serialNumber?: string;
+  isActive?: boolean;
+  outboundProtocols?: OutboundProtocol[];
+  inboundProtocols?: InboundProtocol[];
+};
+
+export function defineNetworks(
+  networks: Network[],
+): Tagged<{ networks: Network[] }, "networks"> {
+  return Object.assign({}, { networks }, { [KIND_TAG]: "networks" as const });
+}
+
+export function defineDevices(
+  devices: Device[],
+): Tagged<{ devices: Device[] }, "devices"> {
+  return Object.assign({}, { devices }, { [KIND_TAG]: "devices" as const });
 }
 
 // ──────────────────────────────────────────────────────────────────────

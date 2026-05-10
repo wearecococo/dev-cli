@@ -15,6 +15,7 @@ builds apps can also configure the platform from the same repo.
 - [Authoring a custom app](#authoring-a-custom-app)
 - [Authoring an edge app](#authoring-an-edge-app)
 - [Tenant IAM (users + policies)](#tenant-iam-users--policies)
+- [Networks + devices](#networks--devices)
 - [Daily workflow](#daily-workflow)
 - [Migrating v1 integrations](#migrating-v1-integrations)
 - [Reference](#reference)
@@ -424,6 +425,100 @@ tenant); `handle` is a stable custom ID for policies. Bindings reference
 by these natural keys, and the loader rejects bindings that point at
 entities not declared locally **and** not present on the server.
 
+## Networks + devices
+
+Networks group IoT controllers, devices, and databases. Devices are
+the leaf resources — they belong to a network (optional) and carry
+inbound + outbound protocol configs. Same flat-file pattern as IAM:
+
+```
+networks.ts         # defineNetworks([...])
+devices.ts          # defineDevices([...])
+```
+
+```ts
+// networks.ts
+import { defineNetworks } from "@wearecococo/dev-cli/define";
+export default defineNetworks([
+  { name: "press-floor", description: "Production floor" },
+  { name: "office" },
+]);
+```
+
+```ts
+// devices.ts
+import { defineDevices } from "@wearecococo/dev-cli/define";
+export default defineDevices([
+  {
+    identifier: "press-01",
+    network: "press-floor",     // ref to networks.ts by name
+    name: "Heidelberg Press",
+    manufacturer: "Heidelberg",
+    outboundProtocols: [
+      {
+        kind: "HTTP",
+        url: "https://press-01.local/api",
+        authMode: "BASIC",
+        username: "ops",
+        password: "${config:PRESS_01_HTTP_PASSWORD}",
+      },
+      {
+        kind: "SQL",
+        adapter: "POSTGRESQL",
+        host: "press-01.local",
+        port: 5432,
+        databaseName: "metrics",
+        username: "reader",
+      },
+    ],
+    inboundProtocols: [
+      { kind: "MQTT", topic: "press/01/telemetry" },
+      { kind: "HTTP", webhookPath: "/hooks/press-01" },
+    ],
+  },
+]);
+```
+
+Apply the same way as users/policies — `cococo apply` picks up all
+ops files at the repo root and pushes them in dependency order
+(policies → users → bindings → networks → devices):
+
+```sh
+bunx cococo apply
+# →   network + press-floor
+#     network + office
+#     device  + press-01 → press-floor
+```
+
+**Discriminated protocol unions.** Each `outboundProtocols[*]` entry is
+a discriminated union over `kind` — only the fields that apply to that
+protocol typecheck:
+
+| Kind | Required | Optional |
+|---|---|---|
+| `HTTP` | `url` | `authMode`, `username`, `password`, `label` |
+| `JMF`  | `url` | `label` |
+| `MQTT` | `url`, `topic` | `authMode`, `username`, `password`, `label` |
+| `SQL`  | `adapter` | `host`, `port`, `databaseName`, `username`, `password`, `connectionString`, `url` (SQLite path), `label` |
+
+`inboundProtocols[*]` likewise:
+
+| Kind | Required |
+|---|---|
+| `MQTT` | `topic` |
+| `HTTP` | `webhookPath` |
+
+A typo or wrong-field combination is a compile error, not a server reject.
+
+**Secrets.** `password` and `connectionString` are write-only on the
+server — `pull` would never round-trip them. Use literal values for
+quick setup, or `${config:NAME}` template strings to defer the value
+to per-installation tenant config.
+
+**Removals.** `cococo apply` is additive. Use `cococo delete network <name>`
+or `cococo delete device <identifier>` to take rows off the server,
+then drop the local entry to keep the next apply consistent.
+
 ## Daily workflow
 
 These commands work the same way for all three kinds — they dispatch by
@@ -534,10 +629,12 @@ on PATH, you get the skeleton plus a self-contained prompt at
         ├── libraries/<name>.lua           # optional
         └── onMessage.lua                  # optional
 
-# Tenant IAM lives at the repo root as flat per-kind files:
+# Tenant config lives at the repo root as flat per-kind files:
 users.ts                                   # defineUsers([...])
 iam_policies.ts                            # defineIAMPolicies([...])
 bindings.ts                                # defineBindings([...])
+networks.ts                                # defineNetworks([...])
+devices.ts                                 # defineDevices([...])
 ```
 
 ### Commands
@@ -553,8 +650,8 @@ bindings.ts                                # defineBindings([...])
 | `cococo validate [folder]` | Server-validate the remote draft (integrations only) |
 | `cococo publish [folder]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED) |
 | `cococo deprecate [folder]` | Retire the PUBLISHED definition. Integrations: ACTIVE → DEPRECATED. Edge apps: PUBLISHED → DEPRECATED. Existing installations keep working until upgraded. Custom apps don't apply |
-| `cococo apply` | Apply tenant-IAM ops files (`users.ts`, `iam_policies.ts`, `bindings.ts`) at the repo root. Additive: upserts what's declared, never deletes |
-| `cococo delete user\|policy\|binding <args>` | Remove a tenant-IAM resource. `user <email>`, `policy <handle>`, `binding <email> <policy-handle>` |
+| `cococo apply` | Apply tenant ops files at the repo root (`users.ts`, `iam_policies.ts`, `bindings.ts`, `networks.ts`, `devices.ts`). Additive: upserts what's declared, never deletes |
+| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `binding <email> <policy-handle>`, `network <name>`, `device <identifier>` |
 | `cococo pull <id\|handle> [--type app\|edge] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |

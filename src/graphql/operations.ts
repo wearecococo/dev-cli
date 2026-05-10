@@ -1310,3 +1310,202 @@ export async function detachPolicy(
     throw new Error(`detachPolicy returned success=false with no errors.`);
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Networks + Devices. Networks group IoT controllers, devices, and
+// databases. Devices belong to a network (optional) and carry a list
+// of inbound + outbound protocol configs. Authored as flat per-kind
+// files at the repo root: `networks.ts`, `devices.ts`. Applied
+// additively with `cococo apply`.
+// ──────────────────────────────────────────────────────────────────────
+
+export type NetworkState = {
+  id: string;
+  name: string;
+  description?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const NETWORK_FIELDS = `id name description createdAt updatedAt`;
+
+export async function listNetworks(
+  client: GraphQLClient,
+  filter?: { name?: string },
+): Promise<NetworkState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.name) filterArg.name = { eq: filter.name };
+  const query = `
+    query ListNetworks($filter: NetworkFilterInput) {
+      listNetworks(first: 500, filter: $filter) {
+        edges { node { ${NETWORK_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listNetworks: { edges: { node: NetworkState }[] };
+  }>(query, { filter: filterArg });
+  return data.listNetworks.edges.map((e) => e.node);
+}
+
+export async function getNetworkByName(
+  client: GraphQLClient,
+  name: string,
+): Promise<NetworkState | undefined> {
+  const matches = await listNetworks(client, { name });
+  return matches[0];
+}
+
+export async function upsertNetwork(
+  client: GraphQLClient,
+  input: { id?: string; name: string; description?: string },
+): Promise<NetworkState> {
+  const query = `
+    mutation UpsertNetwork($input: UpsertNetworkInput!) {
+      upsertNetwork(input: $input) {
+        network { ${NETWORK_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertNetwork: { network: NetworkState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.upsertNetwork.errors.length > 0) {
+    const summary = data.upsertNetwork.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`upsertNetwork failed: ${summary}`);
+  }
+  if (!data.upsertNetwork.network) {
+    throw new Error(`upsertNetwork returned no network and no errors.`);
+  }
+  return data.upsertNetwork.network;
+}
+
+export async function deleteNetwork(client: GraphQLClient, id: string): Promise<void> {
+  const query = `mutation DeleteNetwork($id: NetworkID!) { deleteNetwork(id: $id) { id } }`;
+  await client.request(query, { id });
+}
+
+export type OutboundProtocolKind = "HTTP" | "SQL" | "MQTT" | "JMF";
+export type InboundProtocolKind = "MQTT" | "HTTP";
+export type DeviceAuthMode = "NONE" | "BASIC";
+export type DatabaseAdapter = "MSSQL" | "MYSQL" | "POSTGRESQL" | "SQLITE";
+
+export type OutboundProtocolConfig = {
+  kind: OutboundProtocolKind;
+  label?: string | null;
+  url?: string | null;
+  authMode?: DeviceAuthMode | null;
+  username?: string | null;
+  /** Write-only on the server — never returned by listDevices/getDevice. */
+  password?: string | null;
+  adapter?: DatabaseAdapter | null;
+  host?: string | null;
+  port?: number | null;
+  databaseName?: string | null;
+  /** Write-only on the server. */
+  connectionString?: string | null;
+  topic?: string | null;
+};
+
+export type InboundProtocolConfig = {
+  kind: InboundProtocolKind;
+  label?: string | null;
+  topic?: string | null;
+  webhookPath?: string | null;
+};
+
+export type DeviceState = {
+  id: string;
+  networkId?: string | null;
+  identifier: string;
+  name?: string | null;
+  description?: string | null;
+  deviceType?: string | null;
+  manufacturer?: string | null;
+  model?: string | null;
+  serialNumber?: string | null;
+  outboundProtocols: OutboundProtocolConfig[];
+  inboundProtocols: InboundProtocolConfig[];
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const DEVICE_FIELDS = `
+  id networkId identifier name description deviceType manufacturer model serialNumber
+  isActive createdAt updatedAt
+  outboundProtocols { kind label url authMode username adapter host port databaseName topic }
+  inboundProtocols { kind label topic webhookPath }
+`;
+
+export async function listDevices(
+  client: GraphQLClient,
+  filter?: { identifier?: string; networkId?: string },
+): Promise<DeviceState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.identifier) filterArg.identifier = { eq: filter.identifier };
+  if (filter?.networkId) filterArg.networkId = { eq: filter.networkId };
+  const query = `
+    query ListDevices($filter: DeviceFilterInput) {
+      listDevices(first: 500, filter: $filter) {
+        edges { node { ${DEVICE_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listDevices: { edges: { node: DeviceState }[] };
+  }>(query, { filter: filterArg });
+  return data.listDevices.edges.map((e) => e.node);
+}
+
+export async function getDeviceByIdentifier(
+  client: GraphQLClient,
+  identifier: string,
+): Promise<DeviceState | undefined> {
+  const matches = await listDevices(client, { identifier });
+  return matches[0];
+}
+
+export async function upsertDevice(
+  client: GraphQLClient,
+  input: {
+    id?: string;
+    networkId?: string;
+    identifier: string;
+    name?: string;
+    description?: string;
+    deviceType?: string;
+    manufacturer?: string;
+    model?: string;
+    serialNumber?: string;
+    outboundProtocols?: OutboundProtocolConfig[];
+    inboundProtocols?: InboundProtocolConfig[];
+    isActive?: boolean;
+  },
+): Promise<DeviceState> {
+  const query = `
+    mutation UpsertDevice($input: UpsertDeviceInput!) {
+      upsertDevice(input: $input) {
+        device { ${DEVICE_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertDevice: { device: DeviceState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.upsertDevice.errors.length > 0) {
+    const summary = data.upsertDevice.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`upsertDevice failed: ${summary}`);
+  }
+  if (!data.upsertDevice.device) {
+    throw new Error(`upsertDevice returned no device and no errors.`);
+  }
+  return data.upsertDevice.device;
+}
+
+export async function deleteDevice(client: GraphQLClient, id: string): Promise<void> {
+  const query = `mutation DeleteDevice($id: DeviceID!) { deleteDevice(id: $id) { id } }`;
+  await client.request(query, { id });
+}
