@@ -1,0 +1,25 @@
+{
+  "description": "Execute an action exported by an installed integration",
+  "properties": {
+    "actionConfig": {
+      "description": "Action-specific configuration (schema depends on the action)",
+      "type": "object",
+      "x-supportsExpression": true
+    },
+    "actionName": {
+      "description": "Action name defined in the integration",
+      "type": "string"
+    },
+    "instanceId": {
+      "description": "Integration instance ID (TypeID format)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "instanceId",
+    "actionName"
+  ],
+  "title": "Integration Action Config",
+  "type": "object",
+  "x-nodeType": "integration_action"
+}

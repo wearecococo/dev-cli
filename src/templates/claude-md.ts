@@ -150,13 +150,18 @@ the canonical reference.
 **Add a scheduled workflow:**
 1. \`cococo init nightly-rollup --type workflow\` — scaffold
 2. Edit \`workflows/nightly-rollup/manifest.ts\` — fill in nodes /
-   edges / triggers. Node \`config\` is opaque (\`unknown\`) — the
-   server validates against the per-node-type JSON Schema. Use the
-   MCP \`describe_node_type\` tool to look up valid \`config\` shapes.
+   edges / triggers. Node \`config\` is **typed** for the standard
+   node types — picking \`type: "http_request"\` (etc.) narrows
+   \`config\` and gives autocomplete. Compose nodes via
+   \`defineNode({...})\` if you want to share them across workflows.
 3. \`cococo lint nightly-rollup\` — server-validates the definition
 4. \`cococo push nightly-rollup\` — creates / updates the workflow row
    and snapshots a new version
 5. \`cococo publish nightly-rollup\` — flips the active version pointer
+
+If TS complains about a node \`type\` it doesn't know, your tenant has
+drifted from the shipped baseline — run \`cococo update\` to refresh
+workspace overrides under \`.cococo/generated/\`.
 
 **Onboard a new operator:**
 1. Add to \`users.ts\`: \`{ email: "bob@acme.com", kind: "HUMAN" }\`

@@ -1,0 +1,47 @@
+{
+  "description": "Use an AI agent to automatically resolve a task by choosing from predefined outcomes. Optionally falls back to a human task on failure.",
+  "properties": {
+    "agentId": {
+      "description": "The AI agent that will decide the task outcome.",
+      "type": "string",
+      "x-relatedResource": "ai_agent"
+    },
+    "contextPaths": {
+      "description": "Comma-separated $.path references to include as additional context (e.g. $.nodes.transform1.output, $.input.data)",
+      "format": "textarea",
+      "type": "string",
+      "x-expressionFormat": "path",
+      "x-supportsExpression": true
+    },
+    "fallbackToHuman": {
+      "description": "If enabled and the agent fails to resolve the task, a human task will be created instead and the workflow will wait for manual resolution.",
+      "type": "boolean"
+    },
+    "prompt": {
+      "description": "Additional prompt context for the agent. Supports Mustache templates: {{input.key}}, {{nodes.nodeId.field}}, {{variables.key}}",
+      "format": "textarea",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    },
+    "taskDefinitionId": {
+      "description": "The task definition template that defines the available outcomes/options.",
+      "type": "string",
+      "x-relatedResource": "task_definition"
+    }
+  },
+  "required": [
+    "agentId",
+    "taskDefinitionId"
+  ],
+  "title": "Agent Task Node Config",
+  "type": "object",
+  "x-nodeType": "agent_task",
+  "x-propertyOrder": [
+    "agentId",
+    "taskDefinitionId",
+    "prompt",
+    "contextPaths",
+    "fallbackToHuman"
+  ]
+}

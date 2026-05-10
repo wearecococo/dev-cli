@@ -17,6 +17,7 @@ import { runMigrate } from "./commands/migrate.ts";
 import { runSetupMcp } from "./commands/setup-mcp.ts";
 import { runMcpSwagger } from "./commands/mcp.ts";
 import { runMcpAdd } from "./commands/mcp-add.ts";
+import { runUpdateCommand } from "./commands/update.ts";
 
 const program = new Command();
 
@@ -365,6 +366,22 @@ program
   )
   .action(async (folder: string | undefined) => {
     await runMigrate(folder, apiOpts());
+  });
+
+program
+  .command("update")
+  .description(
+    "Re-sync schema-driven generated artifacts (workflow node-type configs, " +
+      "and more in future phases). Shipped baseline types cover the standard " +
+      "node-type set; this command writes workspace overrides to " +
+      ".cococo/generated/ when your tenant's schemas have drifted from the " +
+      "baseline (newer server, custom node types). Use --check in CI to " +
+      "fail when the workspace files are stale.",
+  )
+  .option("--check", "Exit non-zero if generated files would change (no writes).", false)
+  .option("--only <syncer>", "Run only the named syncer (e.g. node-types)")
+  .action(async (opts: { check: boolean; only?: string }) => {
+    await runUpdateCommand({ check: opts.check, only: opts.only }, apiOpts());
   });
 
 program

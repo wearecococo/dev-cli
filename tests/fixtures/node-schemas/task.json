@@ -1,0 +1,45 @@
+{
+  "description": "Create a human task and wait for resolution before continuing the workflow.",
+  "properties": {
+    "assignedTeamId": {
+      "description": "Team to assign the task to.",
+      "type": "string",
+      "x-relatedResource": "team",
+      "x-supportsExpression": true
+    },
+    "description": {
+      "description": "Override the task description. Supports Mustache templates: {{input.key}}, {{nodes.nodeId.field}}, {{variables.key}}",
+      "format": "textarea",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    },
+    "priority": {
+      "description": "Task priority level.",
+      "type": "string",
+      "x-enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "taskDefinitionId": {
+      "description": "The task definition template to create the task from.",
+      "type": "string",
+      "x-relatedResource": "task_definition"
+    },
+    "title": {
+      "description": "Override the task title (defaults to task definition name). Supports Mustache templates: {{input.key}}, {{nodes.nodeId.field}}, {{variables.key}}",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "taskDefinitionId"
+  ],
+  "title": "Task Node Config",
+  "type": "object",
+  "x-nodeType": "task"
+}

@@ -1,0 +1,30 @@
+{
+  "description": "SQL query node configuration for device database queries",
+  "properties": {
+    "bindings": {
+      "description": "Query parameter bindings (use $. path expressions to reference workflow data)",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-supportsExpression": true
+    },
+    "deviceId": {
+      "description": "Device ID or path expression",
+      "type": "string",
+      "x-relatedResource": "device",
+      "x-supportsExpression": true
+    },
+    "query": {
+      "description": "SQL query string",
+      "format": "textarea",
+      "type": "string"
+    }
+  },
+  "required": [
+    "deviceId"
+  ],
+  "title": "SQL Query Node Config",
+  "type": "object",
+  "x-nodeType": "sql_query"
+}

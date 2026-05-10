@@ -622,20 +622,114 @@ export type WorkflowVariable = {
 };
 
 /**
- * A workflow node. `config` is opaque from the CLI's perspective — the
- * platform's per-node-type JSON Schema dictates valid shapes. Code-bearing
- * configs (e.g. a Lua script) accept `luaFile()` refs; the loader inlines
- * them before serialisation.
+ * A workflow node — base shape, used as the fallback when a node's
+ * `type` isn't in `NodeTypeRegistry`. Typed configs land via the
+ * generated `node-types.d.ts` (shipped with the CLI) which augments
+ * `NodeTypeRegistry`; `defineNode<T>` and the `nodes:` array on
+ * `defineWorkflow` then narrow `config` to the registered shape.
+ *
+ * Code-bearing configs (e.g. a Lua script) accept `luaFile()` refs in
+ * any string field; the loader walks the config tree and inlines them
+ * before serialisation.
  */
 export type WorkflowNode = {
   /** Stable id, unique within the workflow. */
   id: string;
   name: string;
   type: string;
-  /** Per-node config object. Server-validated; pre-codegen, this is unknown. */
+  /** Per-node config object. Untyped at this base level; see `NodeTypeRegistry`. */
   config?: unknown;
   position?: { x: number; y: number };
 };
+
+/**
+ * Map of node-type identifier → typed config shape. Empty here;
+ * augmented by the generated `node-types.d.ts` that ships with the
+ * CLI (and optionally by `.cococo/generated/node-types.d.ts` in user
+ * workspaces with non-baseline tenants). When no entry exists for a
+ * given `type`, nodes fall through to the base `WorkflowNode` shape.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface NodeTypeRegistry {}
+
+/**
+ * Workspace-local override registry, populated by `cococo update`
+ * writing to `.cococo/generated/node-types.d.ts`. Keys here win over
+ * `NodeTypeRegistry`, so a workspace running against a tenant whose
+ * server has drifted (added node types, changed shapes) gets the
+ * tenant's view without colliding with the shipped baseline.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface WorkspaceNodeTypeRegistry {}
+
+// Pull in the shipped baseline registry. Regenerated at maintain time
+// via `bun run codegen`; keep it under `src/generated/` so it ships
+// in the package's `files` whitelist.
+/// <reference path="./generated/node-types.d.ts" />
+
+/**
+ * Effective registry: every key in either the shipped baseline or the
+ * workspace overrides. Workspace types take precedence on shared keys
+ * (when a tenant has drifted from the baseline, the live shape wins).
+ */
+export type RegisteredNodeType =
+  | keyof NodeTypeRegistry
+  | keyof WorkspaceNodeTypeRegistry;
+
+/**
+ * Resolve a node-type's config shape, preferring the workspace
+ * override when one exists. Used by both `defineNode` and the inline
+ * `nodes: [...]` array on `defineWorkflow`.
+ */
+export type ConfigFor<T extends RegisteredNodeType> =
+  T extends keyof WorkspaceNodeTypeRegistry
+    ? WorkspaceNodeTypeRegistry[T]
+    : T extends keyof NodeTypeRegistry
+      ? NodeTypeRegistry[T]
+      : never;
+
+/**
+ * Discriminated union over the effective registry. Picking a `type`
+ * literal narrows `config` to the resolved shape. Nodes whose `type`
+ * is not in either registry fall back to the base `WorkflowNode`,
+ * which keeps unregistered + custom node types compiling.
+ */
+export type AnyWorkflowNode =
+  | {
+      [K in RegisteredNodeType]: {
+        id: string;
+        name: string;
+        type: K;
+        config?: ConfigFor<K>;
+        position?: { x: number; y: number };
+      };
+    }[RegisteredNodeType]
+  | WorkflowNode;
+
+/**
+ * Identity helper that narrows `config` to the registry's entry for
+ * `type`. Use for nodes you want to author as standalone TS objects
+ * and insert into one or more workflows; an inline `nodes: [{...}]`
+ * literal on `defineWorkflow` gets the same typing.
+ *
+ * Returns the spec unchanged at runtime — the wire shape is identical
+ * whether a node is authored inline or via this helper.
+ */
+export function defineNode<T extends RegisteredNodeType>(spec: {
+  id: string;
+  name: string;
+  type: T;
+  config?: ConfigFor<T>;
+  position?: { x: number; y: number };
+}): {
+  id: string;
+  name: string;
+  type: T;
+  config?: ConfigFor<T>;
+  position?: { x: number; y: number };
+} {
+  return spec;
+}
 
 export type WorkflowEdge = {
   id: string;
@@ -712,7 +806,7 @@ export type Workflow = {
   botUser?: UserRef;
   defaultNodeTimeoutSeconds?: number;
   variables?: WorkflowVariable[];
-  nodes: WorkflowNode[];
+  nodes: AnyWorkflowNode[];
   edges: WorkflowEdge[];
   triggers?: WorkflowTriggerSpec[];
 };

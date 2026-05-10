@@ -1,0 +1,54 @@
+{
+  "description": "Run a feasibility audit against a job's production DAG using current progress data. Returns severity, findings, and at-risk items.",
+  "properties": {
+    "durationCriticalFactor": {
+      "description": "Duration overrun critical factor (default 1.5 = 50% over)",
+      "type": "number"
+    },
+    "durationWarningFactor": {
+      "description": "Duration overrun warning factor (default 1.2 = 20% over)",
+      "type": "number"
+    },
+    "jobId": {
+      "description": "Job ID to audit (TypeID or path expression e.g. $.input.jobId)",
+      "type": "string",
+      "x-supportsExpression": true
+    },
+    "wasteCriticalRatio": {
+      "description": "Waste ratio critical threshold (default 0.10 = 10%)",
+      "type": "number"
+    },
+    "wasteWarningRatio": {
+      "description": "Waste ratio warning threshold (default 0.05 = 5%)",
+      "type": "number"
+    },
+    "yieldCriticalRatio": {
+      "description": "Yield ratio critical threshold (default 0.80 = 80%)",
+      "type": "number"
+    },
+    "yieldMinProgressPercent": {
+      "description": "Minimum percent-complete before yield is evaluated (default 50). Below this, yield shortfalls are not flagged.",
+      "type": "number"
+    },
+    "yieldWarningRatio": {
+      "description": "Yield ratio warning threshold (default 0.90 = 90%)",
+      "type": "number"
+    }
+  },
+  "required": [
+    "jobId"
+  ],
+  "title": "Producibility Audit Node Config",
+  "type": "object",
+  "x-nodeType": "producibility_audit",
+  "x-propertyOrder": [
+    "jobId",
+    "wasteWarningRatio",
+    "wasteCriticalRatio",
+    "yieldWarningRatio",
+    "yieldCriticalRatio",
+    "durationWarningFactor",
+    "durationCriticalFactor",
+    "yieldMinProgressPercent"
+  ]
+}

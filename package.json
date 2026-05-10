@@ -17,6 +17,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "codegen": "bun scripts/generate-baseline-types.ts",
     "test": "bun test tests",
     "test:integration": "COCOCO_INTEGRATION_TEST=1 bun test tests/integration.test.ts"
   },

@@ -1,0 +1,1233 @@
+{
+  "$defs": {
+    "agentConfig": {
+      "description": "Invoke an AI agent with a prompt for freeform LLM processing within the workflow.",
+      "properties": {
+        "agentId": {
+          "description": "The AI agent to invoke.",
+          "type": "string",
+          "x-relatedResource": "ai_agent"
+        },
+        "contextPaths": {
+          "description": "Comma-separated $.path references to include as additional context (e.g. $.nodes.transform1.output, $.input.data)",
+          "format": "textarea",
+          "type": "string",
+          "x-expressionFormat": "path",
+          "x-supportsExpression": true
+        },
+        "prompt": {
+          "description": "User message prompt for the agent. Supports Mustache templates: {{input.key}}, {{nodes.nodeId.field}}, {{variables.key}}",
+          "format": "textarea",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        },
+        "responseVariable": {
+          "description": "Optional workflow variable name to store the agent's response in.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "prompt"
+      ],
+      "title": "Agent Node Config",
+      "type": "object",
+      "x-nodeType": "agent",
+      "x-propertyOrder": [
+        "agentId",
+        "prompt",
+        "contextPaths",
+        "responseVariable"
+      ]
+    },
+    "agent_taskConfig": {
+      "description": "Use an AI agent to automatically resolve a task by choosing from predefined outcomes. Optionally falls back to a human task on failure.",
+      "properties": {
+        "agentId": {
+          "description": "The AI agent that will decide the task outcome.",
+          "type": "string",
+          "x-relatedResource": "ai_agent"
+        },
+        "contextPaths": {
+          "description": "Comma-separated $.path references to include as additional context (e.g. $.nodes.transform1.output, $.input.data)",
+          "format": "textarea",
+          "type": "string",
+          "x-expressionFormat": "path",
+          "x-supportsExpression": true
+        },
+        "fallbackToHuman": {
+          "description": "If enabled and the agent fails to resolve the task, a human task will be created instead and the workflow will wait for manual resolution.",
+          "type": "boolean"
+        },
+        "prompt": {
+          "description": "Additional prompt context for the agent. Supports Mustache templates: {{input.key}}, {{nodes.nodeId.field}}, {{variables.key}}",
+          "format": "textarea",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        },
+        "taskDefinitionId": {
+          "description": "The task definition template that defines the available outcomes/options.",
+          "type": "string",
+          "x-relatedResource": "task_definition"
+        }
+      },
+      "required": [
+        "agentId",
+        "taskDefinitionId"
+      ],
+      "title": "Agent Task Node Config",
+      "type": "object",
+      "x-nodeType": "agent_task",
+      "x-propertyOrder": [
+        "agentId",
+        "taskDefinitionId",
+        "prompt",
+        "contextPaths",
+        "fallbackToHuman"
+      ]
+    },
+    "assertConfig": {
+      "description": "Validates a condition and fails the workflow or branches based on result",
+      "properties": {
+        "condition": {
+          "description": "JSONLogic expression to evaluate (see jsonlogic.com)",
+          "type": "object"
+        },
+        "message": {
+          "description": "Error message if assertion fails (supports {{$.path}} templates)",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        },
+        "softFail": {
+          "description": "If true, outputs {passed: false} instead of throwing (default: false)",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "condition"
+      ],
+      "title": "Assert Node Config",
+      "type": "object",
+      "x-nodeType": "assert"
+    },
+    "conditionConfig": {
+      "description": "Condition node configuration with JSONLogic expression",
+      "properties": {
+        "expression": {
+          "description": "JSONLogic expression object (see jsonlogic.com)",
+          "type": "object"
+        }
+      },
+      "required": [
+        "expression"
+      ],
+      "title": "Condition Node Config",
+      "type": "object",
+      "x-nodeType": "condition"
+    },
+    "csv_parseConfig": {
+      "description": "CSV parse/encode node configuration for converting between CSV strings and structured data",
+      "properties": {
+        "columns": {
+          "description": "Column names to use. In parse mode without headers, these become the keys. In encode mode, these define column order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "delimiter": {
+          "description": "Column delimiter character (default ',')",
+          "type": "string"
+        },
+        "hasHeaders": {
+          "description": "(parse mode) Whether the first row contains column headers (default true)",
+          "type": "boolean"
+        },
+        "mode": {
+          "description": "Operation mode: 'parse' to convert CSV to array of objects, 'encode' to convert array of objects to CSV",
+          "enum": [
+            "parse",
+            "encode"
+          ],
+          "type": "string"
+        },
+        "source": {
+          "description": "Path expression or literal for the input data",
+          "type": "string",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "CSV Parse/Encode Node Config",
+      "type": "object",
+      "x-nodeType": "csv_parse"
+    },
+    "custom_actionConfig": {
+      "description": "Execute a user-defined custom action backed by a Lua script",
+      "properties": {
+        "actionConfig": {
+          "description": "Action-specific configuration (auto-populated from the action's config schema)",
+          "type": "object",
+          "x-dynamicSchema": "customAction.configSchema",
+          "x-supportsExpression": true
+        },
+        "actionId": {
+          "description": "Custom action to execute",
+          "type": "string",
+          "x-relatedResource": "customAction"
+        }
+      },
+      "required": [
+        "actionId"
+      ],
+      "title": "Custom Action Config",
+      "type": "object",
+      "x-nodeType": "custom_action"
+    },
+    "delayConfig": {
+      "description": "Delay node pauses workflow execution for a configurable duration, then passes input through unchanged",
+      "properties": {
+        "jitter": {
+          "description": "Optional random jitter range in seconds (+/- this value)",
+          "type": "integer"
+        },
+        "seconds": {
+          "description": "Wait time in seconds (integer)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seconds"
+      ],
+      "title": "Delay Node Config",
+      "type": "object",
+      "x-nodeType": "delay"
+    },
+    "edge": {
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "type": "string"
+        },
+        "fromNodeId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "toNodeId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "fromNodeId",
+        "toNodeId"
+      ],
+      "type": "object"
+    },
+    "file_checkConfig": {
+      "description": "Checks if a file or directory exists on on-premise storage via a BridgeApp controller",
+      "properties": {
+        "controllerId": {
+          "description": "Controller ID or path expression (TypeID with 'ctl' prefix)",
+          "type": "string",
+          "x-relatedResource": "controller",
+          "x-supportsExpression": true
+        },
+        "path": {
+          "description": "Absolute file path on the controller's filesystem, or path expression",
+          "type": "string",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "controllerId",
+        "path"
+      ],
+      "title": "File Check Node Config",
+      "type": "object",
+      "x-nodeType": "file_check"
+    },
+    "file_deleteConfig": {
+      "description": "Deletes a file on on-premise storage via a BridgeApp controller",
+      "properties": {
+        "controllerId": {
+          "description": "Controller ID or path expression (TypeID with 'ctl' prefix)",
+          "type": "string",
+          "x-relatedResource": "controller",
+          "x-supportsExpression": true
+        },
+        "ignoreNotFound": {
+          "description": "If true, succeed even if the file doesn't exist (default: false)",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Absolute file path on the controller's filesystem, or path expression",
+          "type": "string",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "controllerId",
+        "path"
+      ],
+      "title": "File Delete Node Config",
+      "type": "object",
+      "x-nodeType": "file_delete"
+    },
+    "file_listConfig": {
+      "description": "Lists directory contents on on-premise storage via a BridgeApp controller",
+      "properties": {
+        "controllerId": {
+          "description": "Controller ID or path expression (TypeID with 'ctl' prefix)",
+          "type": "string",
+          "x-relatedResource": "controller",
+          "x-supportsExpression": true
+        },
+        "path": {
+          "description": "Absolute directory path on the controller's filesystem, or path expression",
+          "type": "string",
+          "x-supportsExpression": true
+        },
+        "pattern": {
+          "description": "Optional glob pattern to filter entries (e.g. '*.xml')",
+          "type": "string"
+        }
+      },
+      "required": [
+        "controllerId",
+        "path"
+      ],
+      "title": "File List Node Config",
+      "type": "object",
+      "x-nodeType": "file_list"
+    },
+    "file_readConfig": {
+      "description": "Reads file content from on-premise storage via a BridgeApp controller",
+      "properties": {
+        "controllerId": {
+          "description": "Controller ID or path expression (TypeID with 'ctl' prefix)",
+          "type": "string",
+          "x-relatedResource": "controller",
+          "x-supportsExpression": true
+        },
+        "encoding": {
+          "description": "File encoding (default: utf8)",
+          "enum": [
+            "utf8",
+            "base64"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute file path on the controller's filesystem, or path expression",
+          "type": "string",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "controllerId",
+        "path"
+      ],
+      "title": "File Read Node Config",
+      "type": "object",
+      "x-nodeType": "file_read"
+    },
+    "file_writeConfig": {
+      "description": "Writes content to a file on on-premise storage via a BridgeApp controller",
+      "properties": {
+        "content": {
+          "description": "Content to write, or path expression",
+          "type": "string",
+          "x-supportsExpression": true
+        },
+        "controllerId": {
+          "description": "Controller ID or path expression (TypeID with 'ctl' prefix)",
+          "type": "string",
+          "x-relatedResource": "controller",
+          "x-supportsExpression": true
+        },
+        "createDirectories": {
+          "description": "Create parent directories if they don't exist (default: true)",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Absolute file path on the controller's filesystem, or path expression",
+          "type": "string",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "controllerId",
+        "path",
+        "content"
+      ],
+      "title": "File Write Node Config",
+      "type": "object",
+      "x-nodeType": "file_write"
+    },
+    "for_eachConfig": {
+      "description": "Iterates over an array and executes a body node for each item",
+      "properties": {
+        "as": {
+          "description": "Variable name for the current item (default: 'item')",
+          "type": "string"
+        },
+        "body": {
+          "description": "Embedded node definition to execute per item",
+          "type": "object"
+        },
+        "items": {
+          "description": "Path expression to an array (e.g. '$.nodes.file_list.entries')",
+          "type": "string",
+          "x-supportsExpression": true
+        },
+        "maxConcurrency": {
+          "description": "Maximum parallel executions (default: 1)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "body"
+      ],
+      "title": "For Each Node Config",
+      "type": "object",
+      "x-nodeType": "for_each"
+    },
+    "graphqlConfig": {
+      "description": "GraphQL node configuration for executing queries and mutations against the Pulse API",
+      "properties": {
+        "operation": {
+          "description": "GraphQL operation type",
+          "enum": [
+            "query",
+            "mutation"
+          ],
+          "type": "string"
+        },
+        "query": {
+          "description": "GraphQL query or mutation string",
+          "format": "textarea",
+          "type": "string"
+        },
+        "variables": {
+          "description": "GraphQL variables. Values can be path expressions ($.input.key) or literals.",
+          "type": "object",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "operation",
+        "query"
+      ],
+      "title": "GraphQL Query/Mutation Node Config",
+      "type": "object",
+      "x-nodeType": "graphql"
+    },
+    "http_requestConfig": {
+      "description": "HTTP request node configuration for device communication",
+      "properties": {
+        "body": {
+          "description": "Request body",
+          "type": "string",
+          "x-supportsExpression": true
+        },
+        "deviceId": {
+          "description": "Device ID or path expression",
+          "type": "string",
+          "x-relatedResource": "device",
+          "x-supportsExpression": true
+        },
+        "headers": {
+          "description": "Request headers",
+          "type": "object",
+          "x-supportsExpression": true
+        },
+        "method": {
+          "description": "HTTP method",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "Request path",
+          "type": "string",
+          "x-supportsExpression": true
+        },
+        "query": {
+          "description": "Query parameters",
+          "type": "object",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "deviceId"
+      ],
+      "title": "HTTP Request Node Config",
+      "type": "object",
+      "x-nodeType": "http_request"
+    },
+    "integration_actionConfig": {
+      "description": "Execute an action exported by an installed integration",
+      "properties": {
+        "actionConfig": {
+          "description": "Action-specific configuration (schema depends on the action)",
+          "type": "object",
+          "x-supportsExpression": true
+        },
+        "actionName": {
+          "description": "Action name defined in the integration",
+          "type": "string"
+        },
+        "instanceId": {
+          "description": "Integration instance ID (TypeID format)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instanceId",
+        "actionName"
+      ],
+      "title": "Integration Action Config",
+      "type": "object",
+      "x-nodeType": "integration_action"
+    },
+    "joinConfig": {
+      "description": "Join node merges 2+ inputs into a single output. Completes only when all inputs are available.",
+      "oneOf": [
+        {
+          "properties": {
+            "strategy": {
+              "enum": [
+                "merge"
+              ]
+            }
+          },
+          "required": [
+            "strategy"
+          ],
+          "title": "Merge"
+        },
+        {
+          "properties": {
+            "strategy": {
+              "enum": [
+                "array"
+              ]
+            }
+          },
+          "required": [
+            "strategy"
+          ],
+          "title": "Array"
+        },
+        {
+          "properties": {
+            "strategy": {
+              "enum": [
+                "keyed"
+              ]
+            }
+          },
+          "required": [
+            "strategy",
+            "keys"
+          ],
+          "title": "Keyed"
+        }
+      ],
+      "properties": {
+        "keys": {
+          "description": "Mapping of predecessor node IDs to output keys. If not specified, node IDs are used as keys.",
+          "type": "object",
+          "x-supportsExpression": true
+        },
+        "strategy": {
+          "description": "Merge strategy: 'merge' deep-merges all input objects, 'array' collects inputs into an array, 'keyed' uses node IDs (or custom keys) as object keys",
+          "enum": [
+            "merge",
+            "array",
+            "keyed"
+          ],
+          "type": "string"
+        }
+      },
+      "title": "Join Node Config",
+      "type": "object",
+      "x-nodeType": "join"
+    },
+    "json_parseConfig": {
+      "description": "JSON parse/encode node configuration for converting between JSON strings and structured data",
+      "properties": {
+        "mode": {
+          "description": "Operation mode: 'parse' to convert JSON string to object, 'encode' to convert object to JSON string",
+          "enum": [
+            "parse",
+            "encode"
+          ],
+          "type": "string"
+        },
+        "pretty": {
+          "description": "(encode mode only) Whether to pretty-print the JSON output",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Path expression or literal for the input data to process",
+          "type": "string",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "JSON Parse/Encode Node Config",
+      "type": "object",
+      "x-nodeType": "json_parse"
+    },
+    "logConfig": {
+      "description": "Logs a message to the execution log and passes input through unchanged",
+      "properties": {
+        "level": {
+          "description": "Log level (default: info)",
+          "enum": [
+            "debug",
+            "info",
+            "warning",
+            "error"
+          ],
+          "type": "string"
+        },
+        "message": {
+          "description": "Log message with optional {{$.path}} template interpolation",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "Log Node Config",
+      "type": "object",
+      "x-nodeType": "log"
+    },
+    "messageConfig": {
+      "description": "Send a templated notification to a group or individual recipient.",
+      "properties": {
+        "body": {
+          "description": "Plain text message body with {{path}} template placeholders",
+          "format": "textarea",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        },
+        "bodyHtml": {
+          "description": "Optional HTML message body with {{path}} template placeholders",
+          "format": "textarea",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        },
+        "groupId": {
+          "description": "Notification group ID. All recipients in the group will receive the message. Mutually exclusive with recipientId.",
+          "type": "string",
+          "x-relatedResource": "notification_group",
+          "x-supportsExpression": true
+        },
+        "recipientId": {
+          "description": "Specific recipient user ID for single-recipient messages. Mutually exclusive with groupId.",
+          "type": "string",
+          "x-relatedResource": "user",
+          "x-supportsExpression": true
+        },
+        "subject": {
+          "description": "Message subject with {{path}} template placeholders",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "subject",
+        "body"
+      ],
+      "title": "Message Node Config",
+      "type": "object",
+      "x-nodeType": "message"
+    },
+    "microsqlConfig": {
+      "description": "Run a MicroSQL query against the platform's reporting engine",
+      "properties": {
+        "bindings": {
+          "description": "Named parameter bindings — keys match :paramName in query, values are literals or expressions",
+          "type": "object",
+          "x-queryParameterBindings": "query",
+          "x-supportsExpression": true
+        },
+        "maxRows": {
+          "description": "Maximum rows to return (default: 1000, max: 10000)",
+          "type": "integer"
+        },
+        "query": {
+          "description": "MicroSQL query with optional :paramName named parameters",
+          "minLength": 1,
+          "type": "string",
+          "x-editor": "code",
+          "x-editorLanguage": "sql"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "MicroSQL Node Config",
+      "type": "object",
+      "x-nodeType": "microsql",
+      "x-propertyOrder": [
+        "query",
+        "bindings",
+        "maxRows"
+      ]
+    },
+    "ml_predictConfig": {
+      "description": "Run ML model prediction with typed feature inputs",
+      "properties": {
+        "features": {
+          "description": "Feature values or path expressions (e.g. $.input.temperature, $.nodes.prev.output.weight) for each input feature",
+          "type": "object",
+          "x-dynamicSchema": "mlModelConfig.inferenceSchema",
+          "x-supportsExpression": true
+        },
+        "modelName": {
+          "description": "ML model config name",
+          "type": "string",
+          "x-relatedResource": "mlModelConfig",
+          "x-resourceValueField": "name"
+        }
+      },
+      "required": [
+        "modelName",
+        "features"
+      ],
+      "title": "ML Prediction Node Config",
+      "type": "object",
+      "x-nodeType": "ml_predict",
+      "x-propertyOrder": [
+        "modelName",
+        "features"
+      ]
+    },
+    "mqtt_publishConfig": {
+      "description": "MQTT publish node configuration. Device is optional - if present, message targets that device only.",
+      "properties": {
+        "deviceId": {
+          "description": "Optional device ID or path expression. If present, message is sent only to this device via DeviceActor.",
+          "type": "string",
+          "x-relatedResource": "device",
+          "x-supportsExpression": true
+        },
+        "message": {
+          "description": "Message payload (string or path expression)",
+          "type": "string",
+          "x-supportsExpression": true
+        },
+        "rpc": {
+          "description": "Whether to use RPC mode (wait for response)",
+          "type": "boolean"
+        },
+        "topic": {
+          "description": "MQTT topic to publish to",
+          "type": "string"
+        }
+      },
+      "required": [
+        "topic",
+        "message"
+      ],
+      "title": "MQTT Publish Node Config",
+      "type": "object",
+      "x-nodeType": "mqtt_publish"
+    },
+    "node": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "continueOnError": {
+          "type": "boolean"
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxRetries": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "position": {
+          "additionalProperties": false,
+          "description": "Visual position in workflow diagram",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "type": "object"
+        },
+        "timeoutSeconds": {
+          "exclusiveMinimum": true,
+          "minimum": 0,
+          "type": "number"
+        },
+        "type": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "producibility_auditConfig": {
+      "description": "Run a feasibility audit against a job's production DAG using current progress data. Returns severity, findings, and at-risk items.",
+      "properties": {
+        "durationCriticalFactor": {
+          "description": "Duration overrun critical factor (default 1.5 = 50% over)",
+          "type": "number"
+        },
+        "durationWarningFactor": {
+          "description": "Duration overrun warning factor (default 1.2 = 20% over)",
+          "type": "number"
+        },
+        "jobId": {
+          "description": "Job ID to audit (TypeID or path expression e.g. $.input.jobId)",
+          "type": "string",
+          "x-supportsExpression": true
+        },
+        "wasteCriticalRatio": {
+          "description": "Waste ratio critical threshold (default 0.10 = 10%)",
+          "type": "number"
+        },
+        "wasteWarningRatio": {
+          "description": "Waste ratio warning threshold (default 0.05 = 5%)",
+          "type": "number"
+        },
+        "yieldCriticalRatio": {
+          "description": "Yield ratio critical threshold (default 0.80 = 80%)",
+          "type": "number"
+        },
+        "yieldMinProgressPercent": {
+          "description": "Minimum percent-complete before yield is evaluated (default 50). Below this, yield shortfalls are not flagged.",
+          "type": "number"
+        },
+        "yieldWarningRatio": {
+          "description": "Yield ratio warning threshold (default 0.90 = 90%)",
+          "type": "number"
+        }
+      },
+      "required": [
+        "jobId"
+      ],
+      "title": "Producibility Audit Node Config",
+      "type": "object",
+      "x-nodeType": "producibility_audit",
+      "x-propertyOrder": [
+        "jobId",
+        "wasteWarningRatio",
+        "wasteCriticalRatio",
+        "yieldWarningRatio",
+        "yieldCriticalRatio",
+        "durationWarningFactor",
+        "durationCriticalFactor",
+        "yieldMinProgressPercent"
+      ]
+    },
+    "regexConfig": {
+      "description": "Performs regex match, extract, replace, or split operations on strings",
+      "properties": {
+        "flags": {
+          "description": "Regex flags: 'i' for case-insensitive",
+          "type": "string"
+        },
+        "input": {
+          "description": "Input string or path expression to match against",
+          "type": "string",
+          "x-supportsExpression": true
+        },
+        "mode": {
+          "description": "Operation mode (default: match)",
+          "enum": [
+            "match",
+            "extract",
+            "replace",
+            "split"
+          ],
+          "type": "string"
+        },
+        "pattern": {
+          "description": "Regular expression pattern",
+          "type": "string"
+        },
+        "replacement": {
+          "description": "Replacement string for 'replace' mode (supports $1, $2 backreferences)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern",
+        "input"
+      ],
+      "title": "Regex Node Config",
+      "type": "object",
+      "x-nodeType": "regex"
+    },
+    "scriptConfig": {
+      "description": "Script node configuration. Exactly one of scriptId, scriptName, or inline must be specified.",
+      "oneOf": [
+        {
+          "required": [
+            "scriptId"
+          ]
+        },
+        {
+          "required": [
+            "scriptName"
+          ]
+        },
+        {
+          "required": [
+            "inline"
+          ]
+        }
+      ],
+      "properties": {
+        "inline": {
+          "description": "Inline Luau script source code.",
+          "minLength": 1,
+          "type": "string",
+          "x-editor": "code",
+          "x-editorLanguage": "lua"
+        },
+        "scriptId": {
+          "description": "Script ID from the script table (TypeID format).",
+          "minLength": 1,
+          "type": "string"
+        },
+        "scriptName": {
+          "description": "Script name to look up from the script table.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Maximum execution time in milliseconds (default: LUA_MAX_EXECUTION_MS)",
+          "type": "integer"
+        }
+      },
+      "title": "Script Node Config",
+      "type": "object",
+      "x-nodeType": "script"
+    },
+    "set_variableConfig": {
+      "description": "Sets workflow-level variables that can be read by subsequent nodes via $.variables",
+      "properties": {
+        "variables": {
+          "description": "Object mapping variable names to values or path expressions",
+          "type": "object",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "variables"
+      ],
+      "title": "Set Variable Node Config",
+      "type": "object",
+      "x-nodeType": "set_variable"
+    },
+    "splitConfig": {
+      "description": "Split node fans out a single input to all outgoing edges in parallel. No configuration required — simply connect multiple edges from this node.",
+      "title": "Split Node Config",
+      "type": "object",
+      "x-nodeType": "split"
+    },
+    "sql_queryConfig": {
+      "description": "SQL query node configuration for device database queries",
+      "properties": {
+        "bindings": {
+          "description": "Query parameter bindings (use $. path expressions to reference workflow data)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-supportsExpression": true
+        },
+        "deviceId": {
+          "description": "Device ID or path expression",
+          "type": "string",
+          "x-relatedResource": "device",
+          "x-supportsExpression": true
+        },
+        "query": {
+          "description": "SQL query string",
+          "format": "textarea",
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ],
+      "title": "SQL Query Node Config",
+      "type": "object",
+      "x-nodeType": "sql_query"
+    },
+    "switchConfig": {
+      "description": "Switch node selects one output branch from alternatives using JSONLogic predicates",
+      "properties": {
+        "cases": {
+          "description": "Ordered list of cases to evaluate. First matching case wins.",
+          "items": {
+            "properties": {
+              "expression": {
+                "description": "JSONLogic expression to evaluate (see jsonlogic.com)",
+                "type": "object"
+              },
+              "name": {
+                "description": "Branch name (must match an edge condition)",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "expression"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "default": {
+          "description": "Default branch name if no case matches. Must match an edge condition.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cases"
+      ],
+      "title": "Switch Node Config",
+      "type": "object",
+      "x-nodeType": "switch"
+    },
+    "taskConfig": {
+      "description": "Create a human task and wait for resolution before continuing the workflow.",
+      "properties": {
+        "assignedTeamId": {
+          "description": "Team to assign the task to.",
+          "type": "string",
+          "x-relatedResource": "team",
+          "x-supportsExpression": true
+        },
+        "description": {
+          "description": "Override the task description. Supports Mustache templates: {{input.key}}, {{nodes.nodeId.field}}, {{variables.key}}",
+          "format": "textarea",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        },
+        "priority": {
+          "description": "Task priority level.",
+          "type": "string",
+          "x-enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ]
+        },
+        "taskDefinitionId": {
+          "description": "The task definition template to create the task from.",
+          "type": "string",
+          "x-relatedResource": "task_definition"
+        },
+        "title": {
+          "description": "Override the task title (defaults to task definition name). Supports Mustache templates: {{input.key}}, {{nodes.nodeId.field}}, {{variables.key}}",
+          "type": "string",
+          "x-expressionFormat": "template",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "taskDefinitionId"
+      ],
+      "title": "Task Node Config",
+      "type": "object",
+      "x-nodeType": "task"
+    },
+    "transformConfig": {
+      "description": "Transform node configuration with field mapping",
+      "properties": {
+        "mapping": {
+          "description": "Mapping of output keys to value specifications (path expressions, literals, or operations)",
+          "type": "object",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "mapping"
+      ],
+      "title": "Transform Node Config",
+      "type": "object",
+      "x-nodeType": "transform"
+    },
+    "variable": {
+      "additionalProperties": false,
+      "properties": {
+        "defaultValue": {
+          "description": "Default value for the variable"
+        },
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "workflowValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/workflowValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/workflowValue"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "yaml_parseConfig": {
+      "description": "YAML parse/encode node configuration for converting between YAML strings and structured data",
+      "properties": {
+        "mode": {
+          "description": "Operation mode: 'parse' to convert YAML string to object, 'encode' to convert object to YAML string",
+          "enum": [
+            "parse",
+            "encode"
+          ],
+          "type": "string"
+        },
+        "source": {
+          "description": "Path expression or literal for the input data to process",
+          "type": "string",
+          "x-supportsExpression": true
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "YAML Parse/Encode Node Config",
+      "type": "object",
+      "x-nodeType": "yaml_parse"
+    }
+  },
+  "$id": "https://schemae.tripleclabs.de/schemas/template-content/workflow.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "definition": {
+      "properties": {
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/edge"
+          },
+          "type": "array"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/node"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "variables": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/variable"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes",
+        "edges"
+      ],
+      "type": "object"
+    },
+    "description": {
+      "type": "string"
+    },
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "definition"
+  ],
+  "title": "Workflow Template Content",
+  "type": "object"
+}

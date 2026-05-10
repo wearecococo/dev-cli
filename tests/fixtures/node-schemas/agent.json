@@ -1,0 +1,41 @@
+{
+  "description": "Invoke an AI agent with a prompt for freeform LLM processing within the workflow.",
+  "properties": {
+    "agentId": {
+      "description": "The AI agent to invoke.",
+      "type": "string",
+      "x-relatedResource": "ai_agent"
+    },
+    "contextPaths": {
+      "description": "Comma-separated $.path references to include as additional context (e.g. $.nodes.transform1.output, $.input.data)",
+      "format": "textarea",
+      "type": "string",
+      "x-expressionFormat": "path",
+      "x-supportsExpression": true
+    },
+    "prompt": {
+      "description": "User message prompt for the agent. Supports Mustache templates: {{input.key}}, {{nodes.nodeId.field}}, {{variables.key}}",
+      "format": "textarea",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    },
+    "responseVariable": {
+      "description": "Optional workflow variable name to store the agent's response in.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "agentId",
+    "prompt"
+  ],
+  "title": "Agent Node Config",
+  "type": "object",
+  "x-nodeType": "agent",
+  "x-propertyOrder": [
+    "agentId",
+    "prompt",
+    "contextPaths",
+    "responseVariable"
+  ]
+}

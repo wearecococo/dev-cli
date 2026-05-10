@@ -1,0 +1,36 @@
+{
+  "description": "Switch node selects one output branch from alternatives using JSONLogic predicates",
+  "properties": {
+    "cases": {
+      "description": "Ordered list of cases to evaluate. First matching case wins.",
+      "items": {
+        "properties": {
+          "expression": {
+            "description": "JSONLogic expression to evaluate (see jsonlogic.com)",
+            "type": "object"
+          },
+          "name": {
+            "description": "Branch name (must match an edge condition)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "default": {
+      "description": "Default branch name if no case matches. Must match an edge condition.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cases"
+  ],
+  "title": "Switch Node Config",
+  "type": "object",
+  "x-nodeType": "switch"
+}

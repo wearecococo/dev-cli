@@ -1,0 +1,33 @@
+{
+  "description": "Writes content to a file on on-premise storage via a BridgeApp controller",
+  "properties": {
+    "content": {
+      "description": "Content to write, or path expression",
+      "type": "string",
+      "x-supportsExpression": true
+    },
+    "controllerId": {
+      "description": "Controller ID or path expression (TypeID with 'ctl' prefix)",
+      "type": "string",
+      "x-relatedResource": "controller",
+      "x-supportsExpression": true
+    },
+    "createDirectories": {
+      "description": "Create parent directories if they don't exist (default: true)",
+      "type": "boolean"
+    },
+    "path": {
+      "description": "Absolute file path on the controller's filesystem, or path expression",
+      "type": "string",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "controllerId",
+    "path",
+    "content"
+  ],
+  "title": "File Write Node Config",
+  "type": "object",
+  "x-nodeType": "file_write"
+}

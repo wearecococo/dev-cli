@@ -1,0 +1,28 @@
+{
+  "description": "JSON parse/encode node configuration for converting between JSON strings and structured data",
+  "properties": {
+    "mode": {
+      "description": "Operation mode: 'parse' to convert JSON string to object, 'encode' to convert object to JSON string",
+      "enum": [
+        "parse",
+        "encode"
+      ],
+      "type": "string"
+    },
+    "pretty": {
+      "description": "(encode mode only) Whether to pretty-print the JSON output",
+      "type": "boolean"
+    },
+    "source": {
+      "description": "Path expression or literal for the input data to process",
+      "type": "string",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "mode"
+  ],
+  "title": "JSON Parse/Encode Node Config",
+  "type": "object",
+  "x-nodeType": "json_parse"
+}

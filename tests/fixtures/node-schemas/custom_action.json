@@ -1,0 +1,22 @@
+{
+  "description": "Execute a user-defined custom action backed by a Lua script",
+  "properties": {
+    "actionConfig": {
+      "description": "Action-specific configuration (auto-populated from the action's config schema)",
+      "type": "object",
+      "x-dynamicSchema": "customAction.configSchema",
+      "x-supportsExpression": true
+    },
+    "actionId": {
+      "description": "Custom action to execute",
+      "type": "string",
+      "x-relatedResource": "customAction"
+    }
+  },
+  "required": [
+    "actionId"
+  ],
+  "title": "Custom Action Config",
+  "type": "object",
+  "x-nodeType": "custom_action"
+}

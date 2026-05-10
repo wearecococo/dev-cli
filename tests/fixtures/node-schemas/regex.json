@@ -1,0 +1,39 @@
+{
+  "description": "Performs regex match, extract, replace, or split operations on strings",
+  "properties": {
+    "flags": {
+      "description": "Regex flags: 'i' for case-insensitive",
+      "type": "string"
+    },
+    "input": {
+      "description": "Input string or path expression to match against",
+      "type": "string",
+      "x-supportsExpression": true
+    },
+    "mode": {
+      "description": "Operation mode (default: match)",
+      "enum": [
+        "match",
+        "extract",
+        "replace",
+        "split"
+      ],
+      "type": "string"
+    },
+    "pattern": {
+      "description": "Regular expression pattern",
+      "type": "string"
+    },
+    "replacement": {
+      "description": "Replacement string for 'replace' mode (supports $1, $2 backreferences)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "pattern",
+    "input"
+  ],
+  "title": "Regex Node Config",
+  "type": "object",
+  "x-nodeType": "regex"
+}

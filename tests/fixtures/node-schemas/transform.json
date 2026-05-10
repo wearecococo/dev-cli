@@ -1,0 +1,16 @@
+{
+  "description": "Transform node configuration with field mapping",
+  "properties": {
+    "mapping": {
+      "description": "Mapping of output keys to value specifications (path expressions, literals, or operations)",
+      "type": "object",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "mapping"
+  ],
+  "title": "Transform Node Config",
+  "type": "object",
+  "x-nodeType": "transform"
+}

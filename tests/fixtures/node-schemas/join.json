@@ -1,0 +1,64 @@
+{
+  "description": "Join node merges 2+ inputs into a single output. Completes only when all inputs are available.",
+  "oneOf": [
+    {
+      "properties": {
+        "strategy": {
+          "enum": [
+            "merge"
+          ]
+        }
+      },
+      "required": [
+        "strategy"
+      ],
+      "title": "Merge"
+    },
+    {
+      "properties": {
+        "strategy": {
+          "enum": [
+            "array"
+          ]
+        }
+      },
+      "required": [
+        "strategy"
+      ],
+      "title": "Array"
+    },
+    {
+      "properties": {
+        "strategy": {
+          "enum": [
+            "keyed"
+          ]
+        }
+      },
+      "required": [
+        "strategy",
+        "keys"
+      ],
+      "title": "Keyed"
+    }
+  ],
+  "properties": {
+    "keys": {
+      "description": "Mapping of predecessor node IDs to output keys. If not specified, node IDs are used as keys.",
+      "type": "object",
+      "x-supportsExpression": true
+    },
+    "strategy": {
+      "description": "Merge strategy: 'merge' deep-merges all input objects, 'array' collects inputs into an array, 'keyed' uses node IDs (or custom keys) as object keys",
+      "enum": [
+        "merge",
+        "array",
+        "keyed"
+      ],
+      "type": "string"
+    }
+  },
+  "title": "Join Node Config",
+  "type": "object",
+  "x-nodeType": "join"
+}

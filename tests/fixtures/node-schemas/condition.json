@@ -1,0 +1,15 @@
+{
+  "description": "Condition node configuration with JSONLogic expression",
+  "properties": {
+    "expression": {
+      "description": "JSONLogic expression object (see jsonlogic.com)",
+      "type": "object"
+    }
+  },
+  "required": [
+    "expression"
+  ],
+  "title": "Condition Node Config",
+  "type": "object",
+  "x-nodeType": "condition"
+}

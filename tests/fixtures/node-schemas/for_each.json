@@ -1,0 +1,29 @@
+{
+  "description": "Iterates over an array and executes a body node for each item",
+  "properties": {
+    "as": {
+      "description": "Variable name for the current item (default: 'item')",
+      "type": "string"
+    },
+    "body": {
+      "description": "Embedded node definition to execute per item",
+      "type": "object"
+    },
+    "items": {
+      "description": "Path expression to an array (e.g. '$.nodes.file_list.entries')",
+      "type": "string",
+      "x-supportsExpression": true
+    },
+    "maxConcurrency": {
+      "description": "Maximum parallel executions (default: 1)",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "items",
+    "body"
+  ],
+  "title": "For Each Node Config",
+  "type": "object",
+  "x-nodeType": "for_each"
+}

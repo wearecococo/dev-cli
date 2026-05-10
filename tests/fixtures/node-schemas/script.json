@@ -1,0 +1,46 @@
+{
+  "description": "Script node configuration. Exactly one of scriptId, scriptName, or inline must be specified.",
+  "oneOf": [
+    {
+      "required": [
+        "scriptId"
+      ]
+    },
+    {
+      "required": [
+        "scriptName"
+      ]
+    },
+    {
+      "required": [
+        "inline"
+      ]
+    }
+  ],
+  "properties": {
+    "inline": {
+      "description": "Inline Luau script source code.",
+      "minLength": 1,
+      "type": "string",
+      "x-editor": "code",
+      "x-editorLanguage": "lua"
+    },
+    "scriptId": {
+      "description": "Script ID from the script table (TypeID format).",
+      "minLength": 1,
+      "type": "string"
+    },
+    "scriptName": {
+      "description": "Script name to look up from the script table.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "timeout": {
+      "description": "Maximum execution time in milliseconds (default: LUA_MAX_EXECUTION_MS)",
+      "type": "integer"
+    }
+  },
+  "title": "Script Node Config",
+  "type": "object",
+  "x-nodeType": "script"
+}

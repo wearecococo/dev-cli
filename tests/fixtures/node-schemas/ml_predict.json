@@ -1,0 +1,28 @@
+{
+  "description": "Run ML model prediction with typed feature inputs",
+  "properties": {
+    "features": {
+      "description": "Feature values or path expressions (e.g. $.input.temperature, $.nodes.prev.output.weight) for each input feature",
+      "type": "object",
+      "x-dynamicSchema": "mlModelConfig.inferenceSchema",
+      "x-supportsExpression": true
+    },
+    "modelName": {
+      "description": "ML model config name",
+      "type": "string",
+      "x-relatedResource": "mlModelConfig",
+      "x-resourceValueField": "name"
+    }
+  },
+  "required": [
+    "modelName",
+    "features"
+  ],
+  "title": "ML Prediction Node Config",
+  "type": "object",
+  "x-nodeType": "ml_predict",
+  "x-propertyOrder": [
+    "modelName",
+    "features"
+  ]
+}

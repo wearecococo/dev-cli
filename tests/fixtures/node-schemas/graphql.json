@@ -1,0 +1,30 @@
+{
+  "description": "GraphQL node configuration for executing queries and mutations against the Pulse API",
+  "properties": {
+    "operation": {
+      "description": "GraphQL operation type",
+      "enum": [
+        "query",
+        "mutation"
+      ],
+      "type": "string"
+    },
+    "query": {
+      "description": "GraphQL query or mutation string",
+      "format": "textarea",
+      "type": "string"
+    },
+    "variables": {
+      "description": "GraphQL variables. Values can be path expressions ($.input.key) or literals.",
+      "type": "object",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "operation",
+    "query"
+  ],
+  "title": "GraphQL Query/Mutation Node Config",
+  "type": "object",
+  "x-nodeType": "graphql"
+}

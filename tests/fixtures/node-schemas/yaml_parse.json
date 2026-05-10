@@ -1,0 +1,24 @@
+{
+  "description": "YAML parse/encode node configuration for converting between YAML strings and structured data",
+  "properties": {
+    "mode": {
+      "description": "Operation mode: 'parse' to convert YAML string to object, 'encode' to convert object to YAML string",
+      "enum": [
+        "parse",
+        "encode"
+      ],
+      "type": "string"
+    },
+    "source": {
+      "description": "Path expression or literal for the input data to process",
+      "type": "string",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "mode"
+  ],
+  "title": "YAML Parse/Encode Node Config",
+  "type": "object",
+  "x-nodeType": "yaml_parse"
+}

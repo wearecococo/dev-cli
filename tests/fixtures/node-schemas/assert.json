@@ -1,0 +1,25 @@
+{
+  "description": "Validates a condition and fails the workflow or branches based on result",
+  "properties": {
+    "condition": {
+      "description": "JSONLogic expression to evaluate (see jsonlogic.com)",
+      "type": "object"
+    },
+    "message": {
+      "description": "Error message if assertion fails (supports {{$.path}} templates)",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    },
+    "softFail": {
+      "description": "If true, outputs {passed: false} instead of throwing (default: false)",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "condition"
+  ],
+  "title": "Assert Node Config",
+  "type": "object",
+  "x-nodeType": "assert"
+}

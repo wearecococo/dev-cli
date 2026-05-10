@@ -1,0 +1,6 @@
+{
+  "description": "Split node fans out a single input to all outgoing edges in parallel. No configuration required — simply connect multiple edges from this node.",
+  "title": "Split Node Config",
+  "type": "object",
+  "x-nodeType": "split"
+}

@@ -1,0 +1,16 @@
+{
+  "description": "Sets workflow-level variables that can be read by subsequent nodes via $.variables",
+  "properties": {
+    "variables": {
+      "description": "Object mapping variable names to values or path expressions",
+      "type": "object",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "variables"
+  ],
+  "title": "Set Variable Node Config",
+  "type": "object",
+  "x-nodeType": "set_variable"
+}

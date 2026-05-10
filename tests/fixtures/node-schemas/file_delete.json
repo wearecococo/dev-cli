@@ -1,0 +1,27 @@
+{
+  "description": "Deletes a file on on-premise storage via a BridgeApp controller",
+  "properties": {
+    "controllerId": {
+      "description": "Controller ID or path expression (TypeID with 'ctl' prefix)",
+      "type": "string",
+      "x-relatedResource": "controller",
+      "x-supportsExpression": true
+    },
+    "ignoreNotFound": {
+      "description": "If true, succeed even if the file doesn't exist (default: false)",
+      "type": "boolean"
+    },
+    "path": {
+      "description": "Absolute file path on the controller's filesystem, or path expression",
+      "type": "string",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "controllerId",
+    "path"
+  ],
+  "title": "File Delete Node Config",
+  "type": "object",
+  "x-nodeType": "file_delete"
+}

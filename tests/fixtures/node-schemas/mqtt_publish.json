@@ -1,0 +1,31 @@
+{
+  "description": "MQTT publish node configuration. Device is optional - if present, message targets that device only.",
+  "properties": {
+    "deviceId": {
+      "description": "Optional device ID or path expression. If present, message is sent only to this device via DeviceActor.",
+      "type": "string",
+      "x-relatedResource": "device",
+      "x-supportsExpression": true
+    },
+    "message": {
+      "description": "Message payload (string or path expression)",
+      "type": "string",
+      "x-supportsExpression": true
+    },
+    "rpc": {
+      "description": "Whether to use RPC mode (wait for response)",
+      "type": "boolean"
+    },
+    "topic": {
+      "description": "MQTT topic to publish to",
+      "type": "string"
+    }
+  },
+  "required": [
+    "topic",
+    "message"
+  ],
+  "title": "MQTT Publish Node Config",
+  "type": "object",
+  "x-nodeType": "mqtt_publish"
+}

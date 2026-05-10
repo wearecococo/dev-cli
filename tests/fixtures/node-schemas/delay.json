@@ -1,0 +1,19 @@
+{
+  "description": "Delay node pauses workflow execution for a configurable duration, then passes input through unchanged",
+  "properties": {
+    "jitter": {
+      "description": "Optional random jitter range in seconds (+/- this value)",
+      "type": "integer"
+    },
+    "seconds": {
+      "description": "Wait time in seconds (integer)",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "seconds"
+  ],
+  "title": "Delay Node Config",
+  "type": "object",
+  "x-nodeType": "delay"
+}

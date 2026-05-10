@@ -1,0 +1,27 @@
+{
+  "description": "Logs a message to the execution log and passes input through unchanged",
+  "properties": {
+    "level": {
+      "description": "Log level (default: info)",
+      "enum": [
+        "debug",
+        "info",
+        "warning",
+        "error"
+      ],
+      "type": "string"
+    },
+    "message": {
+      "description": "Log message with optional {{$.path}} template interpolation",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "message"
+  ],
+  "title": "Log Node Config",
+  "type": "object",
+  "x-nodeType": "log"
+}

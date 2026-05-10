@@ -1,0 +1,39 @@
+{
+  "description": "CSV parse/encode node configuration for converting between CSV strings and structured data",
+  "properties": {
+    "columns": {
+      "description": "Column names to use. In parse mode without headers, these become the keys. In encode mode, these define column order.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "delimiter": {
+      "description": "Column delimiter character (default ',')",
+      "type": "string"
+    },
+    "hasHeaders": {
+      "description": "(parse mode) Whether the first row contains column headers (default true)",
+      "type": "boolean"
+    },
+    "mode": {
+      "description": "Operation mode: 'parse' to convert CSV to array of objects, 'encode' to convert array of objects to CSV",
+      "enum": [
+        "parse",
+        "encode"
+      ],
+      "type": "string"
+    },
+    "source": {
+      "description": "Path expression or literal for the input data",
+      "type": "string",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "mode"
+  ],
+  "title": "CSV Parse/Encode Node Config",
+  "type": "object",
+  "x-nodeType": "csv_parse"
+}

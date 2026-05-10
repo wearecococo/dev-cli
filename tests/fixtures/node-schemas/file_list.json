@@ -1,0 +1,27 @@
+{
+  "description": "Lists directory contents on on-premise storage via a BridgeApp controller",
+  "properties": {
+    "controllerId": {
+      "description": "Controller ID or path expression (TypeID with 'ctl' prefix)",
+      "type": "string",
+      "x-relatedResource": "controller",
+      "x-supportsExpression": true
+    },
+    "path": {
+      "description": "Absolute directory path on the controller's filesystem, or path expression",
+      "type": "string",
+      "x-supportsExpression": true
+    },
+    "pattern": {
+      "description": "Optional glob pattern to filter entries (e.g. '*.xml')",
+      "type": "string"
+    }
+  },
+  "required": [
+    "controllerId",
+    "path"
+  ],
+  "title": "File List Node Config",
+  "type": "object",
+  "x-nodeType": "file_list"
+}

@@ -1,0 +1,48 @@
+{
+  "description": "HTTP request node configuration for device communication",
+  "properties": {
+    "body": {
+      "description": "Request body",
+      "type": "string",
+      "x-supportsExpression": true
+    },
+    "deviceId": {
+      "description": "Device ID or path expression",
+      "type": "string",
+      "x-relatedResource": "device",
+      "x-supportsExpression": true
+    },
+    "headers": {
+      "description": "Request headers",
+      "type": "object",
+      "x-supportsExpression": true
+    },
+    "method": {
+      "description": "HTTP method",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+        "PATCH"
+      ],
+      "type": "string"
+    },
+    "path": {
+      "description": "Request path",
+      "type": "string",
+      "x-supportsExpression": true
+    },
+    "query": {
+      "description": "Query parameters",
+      "type": "object",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "deviceId"
+  ],
+  "title": "HTTP Request Node Config",
+  "type": "object",
+  "x-nodeType": "http_request"
+}

@@ -1138,10 +1138,43 @@ version + triggers from the server back into a local manifest. Removed
 locally? `cococo delete workflow nightly-rollup` drops the row on the
 server.
 
-> **Phase 1 typing.** Node `config` is `unknown` from the CLI's
-> perspective — TS doesn't know which fields each node type accepts;
-> the server enforces per-node JSON Schemas. A future phase will codegen
-> typed configs from those schemas.
+### Typed node configs
+
+Picking a `node.type` literal narrows `config` to the registered shape
+— `defineWorkflow({ nodes: [{ type: "http_request", config: {...} }] })`
+gets autocomplete and compile-time errors on missing required fields,
+wrong enum values, and unknown keys. Same typing applies to
+standalone `defineNode({...})` objects, so you can build a node
+library and insert nodes into multiple workflows.
+
+```ts
+import { defineNode, defineWorkflow, luaFile } from "@wearecococo/dev-cli/define";
+
+const fetchOrders = defineNode({
+  id: "fetch", name: "Fetch orders", type: "http_request",
+  config: { deviceId: "dev_xyz", method: "GET", path: "/orders" },
+});
+
+const transform = defineNode({
+  id: "transform", name: "Transform", type: "script",
+  // `inline` accepts a string OR a luaFile() ref; the loader inlines
+  // the file content on push.
+  config: { inline: luaFile("./scripts/transform.lua") },
+});
+
+export default defineWorkflow({
+  handle: "nightly-rollup",
+  nodes: [fetchOrders, transform],
+  edges: [{ id: "e1", from: "fetch", to: "transform" }],
+});
+```
+
+The CLI ships a baseline registry covering all current node types —
+`cococo update` is only needed if your tenant has drifted from the
+baseline (newer server, tenant-specific custom nodes). When that
+happens, run `cococo update` to write workspace overrides into
+`.cococo/generated/node-types.d.ts`; add `cococo update --check` to
+your CI to catch stale workspace files.
 
 ## Daily workflow
 
@@ -1312,6 +1345,7 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 | `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `iam-policy-binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user-binding <email> <app>`, `custom-app-team-binding <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>`, `workflow <handle>` |
 | `cococo pull <id\|handle> [--type app\|edge\|workflow] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
+| `cococo update [--check] [--only <syncer>]` | Re-sync schema-driven generated types in `.cococo/generated/`. The shipped baseline covers the standard 30+ workflow node types out of the box; this command writes workspace overrides when your tenant has drifted (newer server, custom node configs). `--check` exits non-zero in CI when files are stale |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |
 | `cococo setup-mcp claude` | Register the cococo MCP endpoint with Claude Code |
 | `cococo mcp swagger <path>` | Run a stdio MCP server over an OpenAPI spec |

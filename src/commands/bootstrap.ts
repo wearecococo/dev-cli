@@ -157,7 +157,14 @@ const TSCONFIG = `{
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["bun-types"]
-  }
+  },
+  // Pick up node_modules/.ts sources, .ts files at the repo root, and
+  // the workspace-side codegen output written by 'cococo update'. The
+  // CLI's shipped baseline node-type registry is auto-loaded via a
+  // triple-slash reference inside @wearecococo/dev-cli/define, so it
+  // doesn't need to be listed here.
+  "include": ["**/*.ts", ".cococo/generated/**/*.d.ts"],
+  "exclude": ["node_modules"]
 }
 `;
 

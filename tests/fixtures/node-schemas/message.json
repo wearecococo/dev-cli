@@ -1,0 +1,44 @@
+{
+  "description": "Send a templated notification to a group or individual recipient.",
+  "properties": {
+    "body": {
+      "description": "Plain text message body with {{path}} template placeholders",
+      "format": "textarea",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    },
+    "bodyHtml": {
+      "description": "Optional HTML message body with {{path}} template placeholders",
+      "format": "textarea",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    },
+    "groupId": {
+      "description": "Notification group ID. All recipients in the group will receive the message. Mutually exclusive with recipientId.",
+      "type": "string",
+      "x-relatedResource": "notification_group",
+      "x-supportsExpression": true
+    },
+    "recipientId": {
+      "description": "Specific recipient user ID for single-recipient messages. Mutually exclusive with groupId.",
+      "type": "string",
+      "x-relatedResource": "user",
+      "x-supportsExpression": true
+    },
+    "subject": {
+      "description": "Message subject with {{path}} template placeholders",
+      "type": "string",
+      "x-expressionFormat": "template",
+      "x-supportsExpression": true
+    }
+  },
+  "required": [
+    "subject",
+    "body"
+  ],
+  "title": "Message Node Config",
+  "type": "object",
+  "x-nodeType": "message"
+}
