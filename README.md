@@ -119,6 +119,51 @@ afterwards to keep apply consistent.
 When in doubt, `cococo dump all -f` shows you what's actually on the
 server vs. what you've declared.
 
+### State-tracking apply (opt-in)
+
+`cococo apply` defaults to the additive model above. For workflows
+where the repo *is* the source of truth (i.e. removing a row from a
+config file should delete it server-side), opt into the state-tracking
+mode by running `cococo state import` once:
+
+```sh
+bunx cococo state import       # adopt current tenant config into managed state
+bunx cococo plan               # preview the next apply (read-only)
+bunx cococo apply              # creates/updates only; refuses if any deletes are planned
+bunx cococo apply --allow-destroy   # required to execute deletions
+```
+
+`state import` writes `.cococo/state.json` (committed to git) recording
+which resources this workspace manages and the spec last successfully
+applied to each. Once that file exists, `cococo apply` switches into
+state-tracking mode automatically.
+
+| Behaviour | Additive (default) | State-tracking |
+|---|---|---|
+| Add a row to a config file | Creates on next apply | Creates on next apply |
+| Edit an existing row | Updates on next apply | Updates on next apply |
+| Remove a row from a config file | **Untouched on server** — use `cococo delete` | **Deleted on server** (under `--allow-destroy`) |
+| Resources created in dashboard / by other repos | Ignored | Ignored — state only manages what you've adopted |
+| Plan preview | n/a — apply is the preview | `cococo plan` shows the diff before mutating |
+
+**Safety gates for deletes.** `cococo apply` refuses to run when the
+plan contains deletions unless you pass `--allow-destroy`. If both
+`--allow-destroy` and any deletes are present, the confirmation prompt
+requires typing the literal word `yes` (not just `y/N`). For
+unattended CI, pass `--yes` to skip the prompt.
+
+**Drift detection.** If the server has been modified outside this
+repo (e.g. someone edited a user via the dashboard), the plan flags
+the affected rows as `~ user alice@acme.com (server modified)`. Apply
+re-converges the server to your declared spec.
+
+**Write-only fields.** Device passwords, edge-app variable secrets,
+and other write-only spec fields are stripped from `.cococo/state.json`
+— they're managed by the future variable-config system. As a result,
+plans currently show those fields as "always changed" until that
+system ships. Use `${config:NAME}` placeholders for production
+secrets so they don't end up in committed state at all.
+
 ## Quick start
 
 Sixty seconds from zero to a workspace mirroring your tenant:
@@ -1341,7 +1386,9 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 | `cococo validate [folder\|--all]` | Server-validate the remote draft (integrations only). `--all` validates every integration, aggregates results |
 | `cococo publish [folder\|--all]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED). `--all` publishes every artifact, stops on first failure |
 | `cococo deprecate [folder]` | Retire the PUBLISHED definition. Integrations: ACTIVE → DEPRECATED. Edge apps: PUBLISHED → DEPRECATED. Existing installations keep working until upgraded. Custom apps don't apply |
-| `cococo apply` | Apply tenant ops files at the repo root. Mostly additive; reconciled lists for team `members` and controller `policy`; tokens are create-only with existence check; installations smart-upsert (exact match / upgrade / create) |
+| `cococo apply [--yes] [--allow-destroy]` | Apply tenant ops files at the repo root. Default mode is **additive** — declared rows upsert, undeclared rows untouched. With a `.cococo/state.json` (created by `cococo state import`), switches to **state-tracking** mode where removing a row from a config file deletes it server-side; deletes require `--allow-destroy` |
+| `cococo plan [--json] [--verbose]` | Read-only preview of the next state-tracking apply. Requires a state file (run `cococo state import` first) |
+| `cococo state import [--yes] [--force]` | Bootstrap `.cococo/state.json` from the live tenant. Adopts every declared resource that already exists on the server; declared-but-absent rows will be created on the next apply. Run once per workspace to opt into state-tracking |
 | `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `iam-policy-binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user-binding <email> <app>`, `custom-app-team-binding <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>`, `workflow <handle>` |
 | `cococo pull <id\|handle> [--type app\|edge\|workflow] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |

@@ -114,3 +114,6 @@ dist
 
 # Claude files
 .claude/settings.local.json
+
+# Ephemeral cococo state lock — present only while a plan/apply is in flight
+.cococo/state.lock

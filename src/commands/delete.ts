@@ -26,6 +26,7 @@ import {
   revokeControllerToken,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
+import { syncStateAfterDelete } from "../state/sync-on-delete.ts";
 
 export type DeleteKind =
   | "user"
@@ -58,11 +59,13 @@ export async function runDelete(
   if (kind === "user") {
     if (args.length !== 1) throw new Error(`cococo delete user <email> — got ${args.length} arg(s).`);
     await deleteUserByEmail(client, args[0]!);
+    await syncStateAfterDelete({ kind: "user", email: args[0]! });
     return;
   }
   if (kind === "policy") {
     if (args.length !== 1) throw new Error(`cococo delete policy <handle> — got ${args.length} arg(s).`);
     await deletePolicyByHandle(client, args[0]!);
+    await syncStateAfterDelete({ kind: "iam_policy", handle: args[0]! });
     return;
   }
   if (kind === "iam-policy-binding") {
@@ -70,11 +73,17 @@ export async function runDelete(
       throw new Error(`cococo delete iam-policy-binding <email> <policy-handle> — got ${args.length} arg(s).`);
     }
     await deleteBinding(client, args[0]!, args[1]!);
+    await syncStateAfterDelete({
+      kind: "iam_policy_binding",
+      email: args[0]!,
+      policyHandle: args[1]!,
+    });
     return;
   }
   if (kind === "network") {
     if (args.length !== 1) throw new Error(`cococo delete network <name> — got ${args.length} arg(s).`);
     await deleteNetworkByName(client, args[0]!);
+    await syncStateAfterDelete({ kind: "network", name: args[0]! });
     return;
   }
   if (kind === "device") {
@@ -82,11 +91,13 @@ export async function runDelete(
       throw new Error(`cococo delete device <identifier> — got ${args.length} arg(s).`);
     }
     await deleteDeviceByIdentifier(client, args[0]!);
+    await syncStateAfterDelete({ kind: "device", identifier: args[0]! });
     return;
   }
   if (kind === "team") {
     if (args.length !== 1) throw new Error(`cococo delete team <name> — got ${args.length} arg(s).`);
     await deleteTeamByName(client, args[0]!);
+    await syncStateAfterDelete({ kind: "team", name: args[0]! });
     return;
   }
   if (kind === "team-member") {
@@ -94,6 +105,10 @@ export async function runDelete(
       throw new Error(`cococo delete team-member <team-name> <email> — got ${args.length} arg(s).`);
     }
     await deleteTeamMember(client, args[0]!, args[1]!);
+    // Team-member deletion doesn't have a top-level state identity —
+    // members are tracked inside the team's spec. The next plan run
+    // will surface the difference if the team's `members` field has
+    // drifted away from the declared list.
     return;
   }
   if (kind === "custom-app-user-binding") {
@@ -101,6 +116,11 @@ export async function runDelete(
       throw new Error(`cococo delete custom-app-user-binding <email> <app-handle> — got ${args.length} arg(s).`);
     }
     await deleteAppUser(client, args[0]!, args[1]!);
+    await syncStateAfterDelete({
+      kind: "custom_app_user_binding",
+      email: args[0]!,
+      appHandle: args[1]!,
+    });
     return;
   }
   if (kind === "custom-app-team-binding") {
@@ -108,6 +128,11 @@ export async function runDelete(
       throw new Error(`cococo delete custom-app-team-binding <team-name> <app-handle> — got ${args.length} arg(s).`);
     }
     await deleteAppTeam(client, args[0]!, args[1]!);
+    await syncStateAfterDelete({
+      kind: "custom_app_team_binding",
+      teamName: args[0]!,
+      appHandle: args[1]!,
+    });
     return;
   }
   if (kind === "controller") {
@@ -115,6 +140,7 @@ export async function runDelete(
       throw new Error(`cococo delete controller <handle> — got ${args.length} arg(s).`);
     }
     await deleteControllerByHandle(client, args[0]!);
+    await syncStateAfterDelete({ kind: "controller", handle: args[0]! });
     return;
   }
   if (kind === "controller-token") {
@@ -124,6 +150,11 @@ export async function runDelete(
       );
     }
     await revokeTokenByName(client, args[0]!, args[1]!);
+    await syncStateAfterDelete({
+      kind: "controller_token",
+      controllerHandle: args[0]!,
+      name: args[1]!,
+    });
     return;
   }
   if (kind === "edge-app-installation") {
@@ -133,6 +164,11 @@ export async function runDelete(
       );
     }
     await deleteInstallation(client, args[0]!, args[1]!, parseInt(args[2]!, 10));
+    await syncStateAfterDelete({
+      kind: "edge_app_installation",
+      controllerHandle: args[0]!,
+      appHandle: args[1]!,
+    });
     return;
   }
   if (kind === "workflow") {
@@ -160,7 +196,7 @@ async function deleteWorkflowByHandle(client: GraphQLClient, handle: string): Pr
   console.log(`  Remember to remove the local workflows/${handle}/ folder if you keep it in git.`);
 }
 
-async function deleteUserByEmail(client: GraphQLClient, email: string): Promise<void> {
+export async function deleteUserByEmail(client: GraphQLClient, email: string): Promise<void> {
   const user = await getUserByEmail(client, email);
   if (!user) {
     console.log(`No user found with email '${email}'.`);
@@ -171,7 +207,7 @@ async function deleteUserByEmail(client: GraphQLClient, email: string): Promise<
   console.log(`  Remember to remove the entry from users.ts to keep apply consistent.`);
 }
 
-async function deletePolicyByHandle(client: GraphQLClient, handle: string): Promise<void> {
+export async function deletePolicyByHandle(client: GraphQLClient, handle: string): Promise<void> {
   const policy = await getIAMPolicy(client, handle);
   if (!policy) {
     console.log(`No policy found with handle '${handle}'.`);
@@ -182,7 +218,7 @@ async function deletePolicyByHandle(client: GraphQLClient, handle: string): Prom
   console.log(`  Remember to remove the entry from iam_policies.ts to keep apply consistent.`);
 }
 
-async function deleteNetworkByName(client: GraphQLClient, name: string): Promise<void> {
+export async function deleteNetworkByName(client: GraphQLClient, name: string): Promise<void> {
   const network = await getNetworkByName(client, name);
   if (!network) {
     console.log(`No network found with name '${name}'.`);
@@ -193,7 +229,7 @@ async function deleteNetworkByName(client: GraphQLClient, name: string): Promise
   console.log(`  Remember to remove the entry from networks.ts to keep apply consistent.`);
 }
 
-async function deleteDeviceByIdentifier(client: GraphQLClient, identifier: string): Promise<void> {
+export async function deleteDeviceByIdentifier(client: GraphQLClient, identifier: string): Promise<void> {
   const device = await getDeviceByIdentifier(client, identifier);
   if (!device) {
     console.log(`No device found with identifier '${identifier}'.`);
@@ -204,7 +240,7 @@ async function deleteDeviceByIdentifier(client: GraphQLClient, identifier: strin
   console.log(`  Remember to remove the entry from devices.ts to keep apply consistent.`);
 }
 
-async function deleteBinding(
+export async function deleteBinding(
   client: GraphQLClient,
   email: string,
   policyHandle: string,
@@ -222,7 +258,7 @@ async function deleteBinding(
   console.log(`  Remember to remove the entry from iam_policy_bindings.ts to keep apply consistent.`);
 }
 
-async function deleteTeamByName(client: GraphQLClient, name: string): Promise<void> {
+export async function deleteTeamByName(client: GraphQLClient, name: string): Promise<void> {
   const team = await getTeamByName(client, name);
   if (!team) {
     console.log(`No team found with name '${name}'.`);
@@ -233,7 +269,7 @@ async function deleteTeamByName(client: GraphQLClient, name: string): Promise<vo
   console.log(`  Remember to remove the entry from teams.ts to keep apply consistent.`);
 }
 
-async function deleteTeamMember(
+export async function deleteTeamMember(
   client: GraphQLClient,
   teamName: string,
   email: string,
@@ -247,7 +283,7 @@ async function deleteTeamMember(
   console.log(`  Remember to remove the entry from teams.ts to keep apply consistent.`);
 }
 
-async function deleteAppUser(
+export async function deleteAppUser(
   client: GraphQLClient,
   email: string,
   appHandle: string,
@@ -261,7 +297,7 @@ async function deleteAppUser(
   console.log(`  Remember to remove the entry from custom_app_user_bindings.ts to keep apply consistent.`);
 }
 
-async function deleteAppTeam(
+export async function deleteAppTeam(
   client: GraphQLClient,
   teamName: string,
   appHandle: string,
@@ -275,7 +311,7 @@ async function deleteAppTeam(
   console.log(`  Remember to remove the entry from custom_app_team_bindings.ts to keep apply consistent.`);
 }
 
-async function deleteControllerByHandle(client: GraphQLClient, handle: string): Promise<void> {
+export async function deleteControllerByHandle(client: GraphQLClient, handle: string): Promise<void> {
   const controller = await getControllerByHandle(client, handle);
   if (!controller) {
     console.log(`No controller found with handle '${handle}'.`);
@@ -286,7 +322,7 @@ async function deleteControllerByHandle(client: GraphQLClient, handle: string): 
   console.log(`  Remember to remove the entry from controllers.ts to keep apply consistent.`);
 }
 
-async function revokeTokenByName(
+export async function revokeTokenByName(
   client: GraphQLClient,
   controllerHandle: string,
   tokenName: string,
@@ -307,7 +343,7 @@ async function revokeTokenByName(
   console.log(`  Remember to remove the entry from controller_tokens.ts to keep apply consistent.`);
 }
 
-async function deleteInstallation(
+export async function deleteInstallation(
   client: GraphQLClient,
   controllerHandle: string,
   appHandle: string,

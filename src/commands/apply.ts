@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { runManagedApply } from "./managed-apply.ts";
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   addTeamMember,
@@ -74,7 +77,22 @@ import {
  *  2. Users   (so we have IDs ready for bindings)
  *  3. Bindings (depend on the first two being in place)
  */
-export async function runApply(overrides: ConfigOverrides): Promise<void> {
+export type ApplyOptions = {
+  yes: boolean;
+  allowDestroy: boolean;
+};
+
+export async function runApply(
+  overrides: ConfigOverrides,
+  opts: ApplyOptions = { yes: false, allowDestroy: false },
+): Promise<void> {
+  // State-tracking apply takes over when .cococo/state.json is present.
+  // Without it, fall through to the original additive flow.
+  const stateFile = resolve(process.cwd(), ".cococo/state.json");
+  if (existsSync(stateFile)) {
+    return runManagedApply(opts, overrides);
+  }
+
   const ops = await loadOps(process.cwd());
   if (Object.values(ops.files).every((v) => v === undefined)) {
     console.log(

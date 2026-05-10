@@ -18,6 +18,8 @@ import { runSetupMcp } from "./commands/setup-mcp.ts";
 import { runMcpSwagger } from "./commands/mcp.ts";
 import { runMcpAdd } from "./commands/mcp-add.ts";
 import { runUpdateCommand } from "./commands/update.ts";
+import { runPlan } from "./commands/plan.ts";
+import { runStateImport } from "./commands/state-import.ts";
 
 const program = new Command();
 
@@ -262,19 +264,55 @@ program
     await runPublish(folder, apiOpts());
   });
 
+const state = program
+  .command("state")
+  .description("State-tracking subcommands for managed apply.");
+
+state
+  .command("import")
+  .description(
+    "Bootstrap .cococo/state.json from the live tenant. Adopts every locally " +
+      "declared resource that already exists on the server. Run this once per " +
+      "workspace before using state-tracking apply.",
+  )
+  .option("-y, --yes", "Skip the confirmation prompt", false)
+  .option("--force", "Overwrite an existing state file", false)
+  .action(async (opts: { yes: boolean; force: boolean }) => {
+    await runStateImport({ yes: opts.yes, force: opts.force }, apiOpts());
+  });
+
+program
+  .command("plan")
+  .description(
+    "Preview the state-tracking apply diff against the live tenant. Read-only; " +
+      "mutates nothing. Shows creates, updates, and deletes (rows in state but no " +
+      "longer declared). Requires a state file — run 'cococo state import' to bootstrap.",
+  )
+  .option("--json", "Emit JSON for tooling instead of the human-readable preview", false)
+  .option("-v, --verbose", "Include unchanged resources in the output", false)
+  .action(async (opts: { json: boolean; verbose: boolean }) => {
+    await runPlan({ json: opts.json, verbose: opts.verbose }, apiOpts());
+  });
+
 program
   .command("apply")
   .description(
-    "Apply tenant ops files at the repo root: users.ts, iam_policies.ts, iam_policy_bindings.ts, " +
-      "networks.ts, devices.ts, teams.ts, custom_app_user_bindings.ts, custom_app_team_bindings.ts, " +
-      "controllers.ts, controller_tokens.ts, edge_app_installations.ts. Mostly additive " +
-      "(upserts what's declared, never deletes), with two reconciled exceptions: team " +
-      "`members` and controller `policy` allowlists are wholesale-replaced from the " +
-      "declared spec. Tokens are create-only with an existence check; the connect " +
-      "bundle is printed once on creation. Use 'cococo delete' for row-level removals.",
+    "Apply tenant ops files at the repo root. Two modes: " +
+      "(1) additive (default when no .cococo/state.json) — upserts what's declared, " +
+      "never deletes (use 'cococo delete' for removals); team `members` and controller " +
+      "`policy` allowlists reconcile inline. " +
+      "(2) state-tracking (when .cococo/state.json exists, bootstrapped via 'cococo state import') — " +
+      "removing a row from a config file deletes it on the server next apply. Plan is " +
+      "shown before mutation; deletions require --allow-destroy and a strict 'yes' confirmation.",
   )
-  .action(async () => {
-    await runApply(apiOpts());
+  .option("-y, --yes", "Skip the confirmation prompt (state-tracking mode only)", false)
+  .option(
+    "--allow-destroy",
+    "Permit deletions in state-tracking mode (refuses to run otherwise if any deletes are planned)",
+    false,
+  )
+  .action(async (opts: { yes: boolean; allowDestroy: boolean }) => {
+    await runApply(apiOpts(), { yes: opts.yes, allowDestroy: opts.allowDestroy });
   });
 
 program

@@ -90,7 +90,23 @@ bunx cococo list                                              # what's on the se
   in \`edge_app_installations.ts\` and re-apply. The CLI detects the
   older install and calls \`upgradeEdgeAppInstallation\` for you.
 
-## Apply semantics — three flavors
+## Apply: additive vs state-tracking
+
+\`cococo apply\` runs in one of two modes depending on whether
+\`.cococo/state.json\` exists:
+
+- **Additive** (default, no state file): declared rows upsert,
+  undeclared rows untouched, removals require \`cococo delete\`.
+- **State-tracking** (after \`cococo state import\`): removing a row
+  from a config file deletes it server-side on next apply. Use
+  \`cococo plan\` to preview, \`cococo apply --allow-destroy\` to
+  permit deletions, \`--yes\` to skip the confirmation prompt.
+
+State-tracking only manages resources you've explicitly adopted
+(\`state import\` matches declarations against the live tenant). Rows
+created in the dashboard or by other workspaces stay unmanaged.
+
+### Apply semantics — three flavors
 
 Most rows are **additive** (declared rows get upserted, undeclared
 ones left alone). A few aren't:
