@@ -1,7 +1,7 @@
 import type { GraphQLClient } from "./client.ts";
 
 export type IntegrationDefinitionStatus = "DRAFT" | "ACTIVE" | "DEPRECATED";
-export type IntegrationRuntimeMode = "bundle" | "script_actor";
+export type RuntimeMode = "bundle" | "script_actor";
 export type EngineVersion = 1 | 2;
 
 export type FieldError = { path: string; message: string };
@@ -40,7 +40,7 @@ type ManifestCommon = {
   description?: string | null;
   dataContainerSchemas?: DataContainerSchemaSpec[] | null;
   actions?: ActionSpec[] | null;
-  runtimeMode?: IntegrationRuntimeMode | null;
+  runtimeMode?: RuntimeMode | null;
   timeoutMs?: number | null;
 };
 
@@ -85,7 +85,7 @@ type BundleCommon = {
   scripts: string;
   workflows: string;
   customAppFiles: string;
-  runtimeMode: IntegrationRuntimeMode;
+  runtimeMode: RuntimeMode;
 };
 
 export type IntegrationBundleV1 = BundleCommon & { manifest: IntegrationManifestV1 };
@@ -204,7 +204,7 @@ export async function createDraft(
   input: {
     integrationId: string;
     version: string;
-    runtimeMode?: IntegrationRuntimeMode;
+    runtimeMode?: RuntimeMode;
     engineVersion?: EngineVersion;
   },
 ): Promise<IntegrationDefinition> {
@@ -1127,10 +1127,10 @@ export async function deleteUser(client: GraphQLClient, id: string): Promise<voi
   await client.request(query, { id });
 }
 
-export type IAMEffect = "ALLOW" | "DENY";
+export type Effect = "ALLOW" | "DENY";
 
 export type IAMStatement = {
-  effect: IAMEffect;
+  effect: Effect;
   actions: string[];
   resources: string[];
 };

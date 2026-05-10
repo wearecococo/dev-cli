@@ -121,7 +121,18 @@ export function file(path: string): string {
 // makes engineVersion optional (defaults to 2 when omitted).
 // ──────────────────────────────────────────────────────────────────────
 
-export type RuntimeMode = "script_actor" | "bundle";
+// Re-export the GraphQL-level enums that surface in the author API so
+// consumers can import them from `@wearecococo/dev-cli/define` alongside
+// the `defineX` helpers. Type-only — no runtime import of the wire
+// module, so the author bundle stays light.
+import type {
+  CustomAppKind,
+  EdgeAppLogLevel,
+  Effect,
+  RuntimeMode,
+  UserKind,
+} from "./graphql/operations.ts";
+export type { CustomAppKind, EdgeAppLogLevel, Effect, RuntimeMode, UserKind };
 
 export type ResourceSpec = {
   id: string;
@@ -240,8 +251,6 @@ export function defineIntegration<T extends IntegrationV2>(spec: T): Tagged<T, "
 // publish snapshots + flips the published-version pointer.
 // ──────────────────────────────────────────────────────────────────────
 
-export type CustomAppKind = "PAGE" | "DASHBOARD" | "KIOSK" | "JOB_VIEW";
-
 /**
  * Author-facing custom-app spec. `template` and `script` accept either
  * an inline string (for one-liners), a `file(...)` reference (for the
@@ -282,8 +291,6 @@ export function defineCustomApp<T extends CustomAppV2>(spec: T): Tagged<T, "app"
 // Int versioning managed server-side. The CLI authors the DRAFT — push
 // upserts, publish flips DRAFT → PUBLISHED.
 // ──────────────────────────────────────────────────────────────────────
-
-export type EdgeAppLogLevel = "DEBUG" | "INFO" | "WARNING" | "ERROR" | "OFF";
 
 /**
  * Discriminated union over the four trigger kinds. Each kind requires a
@@ -570,8 +577,6 @@ export function defineEdgeApp<H extends Record<string, LuaSource>>(
 // deletes); explicit `cococo delete` removes.
 // ──────────────────────────────────────────────────────────────────────
 
-export type UserKind = "HUMAN" | "BOT" | "KIOSK";
-
 /**
  * A user account. `email` is the natural key (unique per tenant) — the
  * loader uses it to resolve to a server-side `UserID` when pushing.
@@ -583,8 +588,6 @@ export type UserSpec = {
   /** Identifier in an external system (HRIS, IdP). Optional. */
   externalId?: string;
 };
-
-export type Effect = "ALLOW" | "DENY";
 
 export type IAMStatement = {
   effect: Effect;
