@@ -151,9 +151,11 @@ program
 program
   .command("apply")
   .description(
-    "Apply tenant ops files (users.ts, iam_policies.ts, bindings.ts, networks.ts, devices.ts) " +
-      "at the repo root. Additive: upserts what's declared, never deletes. " +
-      "Use 'cococo delete' for removals.",
+    "Apply tenant ops files at the repo root: users.ts, iam_policies.ts, bindings.ts, " +
+      "networks.ts, devices.ts, teams.ts, custom_app_users.ts, custom_app_teams.ts. " +
+      "Mostly additive (upserts what's declared, never deletes), with one exception: " +
+      "team `members` lists are reconciled within each declared team. Use 'cococo delete' " +
+      "for explicit row-level removals.",
   )
   .action(async () => {
     await runApply(apiOpts());
@@ -162,13 +164,25 @@ program
 program
   .command("delete <kind> [args...]")
   .description(
-    "Delete a tenant ops resource on the server. Kinds: user (<email>), " +
-      "policy (<handle>), binding (<email> <policy-handle>), network (<name>), " +
-      "device (<identifier>). Local ops files are NOT edited — remove the " +
-      "entry yourself to keep the next apply consistent.",
+    "Delete a tenant ops resource on the server. Kinds: " +
+      "user (<email>), policy (<handle>), binding (<email> <policy>), " +
+      "network (<name>), device (<identifier>), team (<name>), " +
+      "team-member (<team> <email>), custom-app-user (<email> <app>), " +
+      "custom-app-team (<team> <app>). Local ops files are NOT edited — " +
+      "remove the entry yourself to keep the next apply consistent.",
   )
   .action(async (kind: string, args: string[]) => {
-    const allowed = ["user", "policy", "binding", "network", "device"] as const;
+    const allowed = [
+      "user",
+      "policy",
+      "binding",
+      "network",
+      "device",
+      "team",
+      "team-member",
+      "custom-app-user",
+      "custom-app-team",
+    ] as const;
     if (!allowed.includes(kind as (typeof allowed)[number])) {
       throw new Error(
         `cococo delete: unknown kind '${kind}'. Use ${allowed.join(" | ")}.`,

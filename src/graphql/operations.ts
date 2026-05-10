@@ -1509,3 +1509,288 @@ export async function deleteDevice(client: GraphQLClient, id: string): Promise<v
   const query = `mutation DeleteDevice($id: DeviceID!) { deleteDevice(id: $id) { id } }`;
   await client.request(query, { id });
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Teams + custom-app assignments. Teams group users for collaboration
+// and bulk app assignment. The declarative model:
+//
+//  - `teams.ts`             defines teams with an inline `members: [email]`
+//                           list — the apply pass reconciles membership
+//                           within each declared team (declared = canonical).
+//  - `custom_app_users.ts`  attaches individual users to a custom app
+//                           (kiosk-mode visibility).
+//  - `custom_app_teams.ts`  attaches teams to a custom app (non-kiosk
+//                           visibility filtering).
+// ──────────────────────────────────────────────────────────────────────
+
+export type TeamState = {
+  id: string;
+  name: string;
+  description?: string | null;
+  defaultNotificationGroupId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const TEAM_FIELDS = `id name description defaultNotificationGroupId createdAt updatedAt`;
+
+export type TeamMemberState = {
+  id: string;
+  email: string;
+  name?: string | null;
+  joinedAt: string;
+};
+
+export async function listTeams(
+  client: GraphQLClient,
+  filter?: { name?: string },
+): Promise<TeamState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.name) filterArg.name = { eq: filter.name };
+  const query = `
+    query ListTeams($filter: TeamFilterInput) {
+      listTeams(first: 500, filter: $filter) {
+        edges { node { ${TEAM_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listTeams: { edges: { node: TeamState }[] };
+  }>(query, { filter: filterArg });
+  return data.listTeams.edges.map((e) => e.node);
+}
+
+export async function getTeamByName(
+  client: GraphQLClient,
+  name: string,
+): Promise<TeamState | undefined> {
+  const matches = await listTeams(client, { name });
+  return matches[0];
+}
+
+export async function upsertTeam(
+  client: GraphQLClient,
+  input: { id?: string; name: string; description?: string },
+): Promise<TeamState> {
+  const query = `
+    mutation UpsertTeam($input: UpsertTeamInput!) {
+      upsertTeam(input: $input) {
+        team { ${TEAM_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertTeam: { team: TeamState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.upsertTeam.errors.length > 0) {
+    const summary = data.upsertTeam.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`upsertTeam failed: ${summary}`);
+  }
+  if (!data.upsertTeam.team) {
+    throw new Error(`upsertTeam returned no team and no errors.`);
+  }
+  return data.upsertTeam.team;
+}
+
+export async function deleteTeam(client: GraphQLClient, id: string): Promise<void> {
+  const query = `mutation DeleteTeam($id: TeamID!) { deleteTeam(id: $id) { id } }`;
+  await client.request(query, { id });
+}
+
+export async function getTeamMembers(
+  client: GraphQLClient,
+  teamId: string,
+): Promise<TeamMemberState[]> {
+  const query = `
+    query GetTeamMembers($teamId: TeamID!) {
+      getTeamMembers(teamId: $teamId) { id email name joinedAt }
+    }
+  `;
+  const data = await client.request<{ getTeamMembers: TeamMemberState[] }>(query, { teamId });
+  return data.getTeamMembers;
+}
+
+export async function addTeamMember(
+  client: GraphQLClient,
+  input: { teamId: string; userId: string },
+): Promise<void> {
+  const query = `
+    mutation AddTeamMember($input: AddTeamMemberInput!) {
+      addTeamMember(input: $input) { success errors { path message } }
+    }
+  `;
+  const data = await client.request<{
+    addTeamMember: { success: boolean; errors: FieldError[] };
+  }>(query, { input });
+  if (data.addTeamMember.errors.length > 0) {
+    const summary = data.addTeamMember.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`addTeamMember failed: ${summary}`);
+  }
+}
+
+export async function removeTeamMember(
+  client: GraphQLClient,
+  input: { teamId: string; userId: string },
+): Promise<void> {
+  const query = `
+    mutation RemoveTeamMember($input: RemoveTeamMemberInput!) {
+      removeTeamMember(input: $input) { success errors { path message } }
+    }
+  `;
+  const data = await client.request<{
+    removeTeamMember: { success: boolean; errors: FieldError[] };
+  }>(query, { input });
+  if (data.removeTeamMember.errors.length > 0) {
+    const summary = data.removeTeamMember.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`removeTeamMember failed: ${summary}`);
+  }
+}
+
+export type CustomAppUserBindingState = {
+  id: string;
+  customAppId: string;
+  userId: string;
+  createdAt: string;
+};
+
+export type CustomAppTeamBindingState = {
+  id: string;
+  customAppId: string;
+  teamId: string;
+  createdAt: string;
+};
+
+export async function listCustomAppUsers(
+  client: GraphQLClient,
+  filter?: { customAppId?: string; userId?: string },
+): Promise<CustomAppUserBindingState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.customAppId) filterArg.customAppId = { eq: filter.customAppId };
+  if (filter?.userId) filterArg.userId = { eq: filter.userId };
+  const query = `
+    query ListCustomAppUsers($filter: CustomAppUserFilterInput) {
+      listCustomAppUsers(first: 500, filter: $filter) {
+        edges { node { id customAppId userId createdAt } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listCustomAppUsers: { edges: { node: CustomAppUserBindingState }[] };
+  }>(query, { filter: filterArg });
+  return data.listCustomAppUsers.edges.map((e) => e.node);
+}
+
+export async function attachCustomAppUser(
+  client: GraphQLClient,
+  input: { customAppId: string; userId: string },
+): Promise<void> {
+  const query = `
+    mutation AttachCustomAppUser($input: AttachCustomAppUserInput!) {
+      attachCustomAppUser(input: $input) {
+        customAppUser { id }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    attachCustomAppUser: { customAppUser: { id: string } | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.attachCustomAppUser.errors.length > 0) {
+    const summary = data.attachCustomAppUser.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`attachCustomAppUser failed: ${summary}`);
+  }
+}
+
+export async function detachCustomAppUser(
+  client: GraphQLClient,
+  input: { customAppId: string; userId: string },
+): Promise<void> {
+  const query = `
+    mutation DetachCustomAppUser($input: DetachCustomAppUserInput!) {
+      detachCustomAppUser(input: $input) {
+        success
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    detachCustomAppUser: { success: boolean; errors: FieldError[] };
+  }>(query, { input });
+  if (data.detachCustomAppUser.errors.length > 0) {
+    const summary = data.detachCustomAppUser.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`detachCustomAppUser failed: ${summary}`);
+  }
+}
+
+export async function listCustomAppTeams(
+  client: GraphQLClient,
+  filter?: { customAppId?: string; teamId?: string },
+): Promise<CustomAppTeamBindingState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.customAppId) filterArg.customAppId = { eq: filter.customAppId };
+  if (filter?.teamId) filterArg.teamId = { eq: filter.teamId };
+  const query = `
+    query ListCustomAppTeams($filter: CustomAppTeamFilterInput) {
+      listCustomAppTeams(first: 500, filter: $filter) {
+        edges { node { id customAppId teamId createdAt } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listCustomAppTeams: { edges: { node: CustomAppTeamBindingState }[] };
+  }>(query, { filter: filterArg });
+  return data.listCustomAppTeams.edges.map((e) => e.node);
+}
+
+export async function attachCustomAppTeam(
+  client: GraphQLClient,
+  input: { customAppId: string; teamId: string },
+): Promise<void> {
+  const query = `
+    mutation AttachCustomAppTeam($input: AttachCustomAppTeamInput!) {
+      attachCustomAppTeam(input: $input) {
+        customAppTeam { id }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    attachCustomAppTeam: { customAppTeam: { id: string } | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.attachCustomAppTeam.errors.length > 0) {
+    const summary = data.attachCustomAppTeam.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`attachCustomAppTeam failed: ${summary}`);
+  }
+}
+
+export async function detachCustomAppTeam(
+  client: GraphQLClient,
+  input: { customAppId: string; teamId: string },
+): Promise<void> {
+  const query = `
+    mutation DetachCustomAppTeam($input: DetachCustomAppTeamInput!) {
+      detachCustomAppTeam(input: $input) {
+        success
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    detachCustomAppTeam: { success: boolean; errors: FieldError[] };
+  }>(query, { input });
+  if (data.detachCustomAppTeam.errors.length > 0) {
+    const summary = data.detachCustomAppTeam.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`detachCustomAppTeam failed: ${summary}`);
+  }
+}

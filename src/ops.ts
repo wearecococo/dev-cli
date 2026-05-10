@@ -3,9 +3,12 @@ import { resolve } from "node:path";
 import {
   manifestKind,
   type Binding,
+  type CustomAppTeam,
+  type CustomAppUser,
   type Device,
   type IAMPolicy,
   type Network,
+  type Team,
   type User,
 } from "./define.ts";
 
@@ -14,6 +17,9 @@ export const POLICIES_FILENAME = "iam_policies.ts";
 export const BINDINGS_FILENAME = "bindings.ts";
 export const NETWORKS_FILENAME = "networks.ts";
 export const DEVICES_FILENAME = "devices.ts";
+export const TEAMS_FILENAME = "teams.ts";
+export const CUSTOM_APP_USERS_FILENAME = "custom_app_users.ts";
+export const CUSTOM_APP_TEAMS_FILENAME = "custom_app_teams.ts";
 
 export type LoadedOps = {
   /** Absolute paths to the files that were loaded. */
@@ -23,12 +29,18 @@ export type LoadedOps = {
     bindings?: string;
     networks?: string;
     devices?: string;
+    teams?: string;
+    customAppUsers?: string;
+    customAppTeams?: string;
   };
   users: User[];
   policies: IAMPolicy[];
   bindings: Binding[];
   networks: Network[];
   devices: Device[];
+  teams: Team[];
+  customAppUsers: CustomAppUser[];
+  customAppTeams: CustomAppTeam[];
 };
 
 /**
@@ -49,6 +61,9 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
   const bindingsPath = resolve(repoRoot, BINDINGS_FILENAME);
   const networksPath = resolve(repoRoot, NETWORKS_FILENAME);
   const devicesPath = resolve(repoRoot, DEVICES_FILENAME);
+  const teamsPath = resolve(repoRoot, TEAMS_FILENAME);
+  const customAppUsersPath = resolve(repoRoot, CUSTOM_APP_USERS_FILENAME);
+  const customAppTeamsPath = resolve(repoRoot, CUSTOM_APP_TEAMS_FILENAME);
 
   const out: LoadedOps = {
     files: {},
@@ -57,6 +72,9 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     bindings: [],
     networks: [],
     devices: [],
+    teams: [],
+    customAppUsers: [],
+    customAppTeams: [],
   };
 
   if (existsSync(usersPath)) {
@@ -79,13 +97,41 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     out.devices = await loadList(devicesPath, "devices", "devices");
     out.files.devices = devicesPath;
   }
+  if (existsSync(teamsPath)) {
+    out.teams = await loadList(teamsPath, "teams", "teams");
+    out.files.teams = teamsPath;
+  }
+  if (existsSync(customAppUsersPath)) {
+    out.customAppUsers = await loadList(
+      customAppUsersPath,
+      "custom_app_users",
+      "bindings",
+    );
+    out.files.customAppUsers = customAppUsersPath;
+  }
+  if (existsSync(customAppTeamsPath)) {
+    out.customAppTeams = await loadList(
+      customAppTeamsPath,
+      "custom_app_teams",
+      "bindings",
+    );
+    out.files.customAppTeams = customAppTeamsPath;
+  }
 
   validateNoDuplicates(out);
   return out;
 }
 
-type OpsKind = "users" | "iam_policies" | "bindings" | "networks" | "devices";
-type OpsField = "users" | "policies" | "bindings" | "networks" | "devices";
+type OpsKind =
+  | "users"
+  | "iam_policies"
+  | "bindings"
+  | "networks"
+  | "devices"
+  | "teams"
+  | "custom_app_users"
+  | "custom_app_teams";
+type OpsField = "users" | "policies" | "bindings" | "networks" | "devices" | "teams";
 
 async function loadList<T>(
   absPath: string,
@@ -119,7 +165,10 @@ function expectedKindHelper(kind: OpsKind): string {
   if (kind === "iam_policies") return "IAMPolicies";
   if (kind === "bindings") return "Bindings";
   if (kind === "networks") return "Networks";
-  return "Devices";
+  if (kind === "devices") return "Devices";
+  if (kind === "teams") return "Teams";
+  if (kind === "custom_app_users") return "CustomAppUsers";
+  return "CustomAppTeams";
 }
 
 function validateNoDuplicates(ops: LoadedOps): void {
@@ -168,5 +217,48 @@ function validateNoDuplicates(ops: LoadedOps): void {
       );
     }
     seenDevices.add(d.identifier);
+  }
+  const seenTeams = new Set<string>();
+  for (const t of ops.teams) {
+    if (seenTeams.has(t.name)) {
+      throw new Error(
+        `Duplicate team name '${t.name}' in teams.ts. Name is the natural key.`,
+      );
+    }
+    seenTeams.add(t.name);
+    // Member emails inside a single team must also be unique — adding
+    // the same user twice is a no-op on the server but a clear authoring
+    // mistake worth flagging.
+    if (t.members) {
+      const seenMembers = new Set<string>();
+      for (const m of t.members) {
+        if (seenMembers.has(m)) {
+          throw new Error(
+            `Duplicate member '${m}' in team '${t.name}' in teams.ts.`,
+          );
+        }
+        seenMembers.add(m);
+      }
+    }
+  }
+  const seenAppUsers = new Set<string>();
+  for (const b of ops.customAppUsers) {
+    const key = `${b.user}|${b.app}`;
+    if (seenAppUsers.has(key)) {
+      throw new Error(
+        `Duplicate custom-app-user binding ${b.user} → ${b.app} in custom_app_users.ts.`,
+      );
+    }
+    seenAppUsers.add(key);
+  }
+  const seenAppTeams = new Set<string>();
+  for (const b of ops.customAppTeams) {
+    const key = `${b.team}|${b.app}`;
+    if (seenAppTeams.has(key)) {
+      throw new Error(
+        `Duplicate custom-app-team binding ${b.team} → ${b.app} in custom_app_teams.ts.`,
+      );
+    }
+    seenAppTeams.add(key);
   }
 }

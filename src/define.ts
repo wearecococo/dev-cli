@@ -228,7 +228,10 @@ export type ManifestKind =
   | "iam_policies"
   | "bindings"
   | "networks"
-  | "devices";
+  | "devices"
+  | "teams"
+  | "custom_app_users"
+  | "custom_app_teams";
 
 export type Tagged<T, K extends ManifestKind> = T & {
   readonly [KIND_TAG]: K;
@@ -244,7 +247,10 @@ export function manifestKind(value: unknown): ManifestKind | undefined {
     k === "iam_policies" ||
     k === "bindings" ||
     k === "networks" ||
-    k === "devices"
+    k === "devices" ||
+    k === "teams" ||
+    k === "custom_app_users" ||
+    k === "custom_app_teams"
     ? k
     : undefined;
 }
@@ -749,6 +755,69 @@ export function defineDevices(
   devices: Device[],
 ): Tagged<{ devices: Device[] }, "devices"> {
   return Object.assign({}, { devices }, { [KIND_TAG]: "devices" as const });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Teams + custom-app assignments. Authored as `teams.ts`,
+// `custom_app_users.ts`, `custom_app_teams.ts` at the repo root.
+//
+// Team membership semantics: the `members` list on a declared team is
+// the *canonical* membership for that team — apply reconciles to it
+// (declared members get added, undeclared members on the server get
+// removed for that team only). Teams *not* declared in `teams.ts` are
+// untouched.
+//
+// Custom-app bindings (user→app and team→app) are additive at the row
+// level — declared rows get attached, others left alone. Use
+// `cococo delete custom-app-user|custom-app-team` to detach.
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * A team. `name` is the natural key (unique per tenant). `members` is
+ * a list of user emails — the apply pass reconciles to this set
+ * exactly: emails in the list get added, server-side members not in
+ * the list get removed. Omit `members` to skip membership reconciliation
+ * for this team (just upsert the team row itself).
+ */
+export type Team = {
+  name: string;
+  description?: string;
+  members?: string[];
+};
+
+/**
+ * A user → custom-app attachment. `user` is an email; `app` is a
+ * custom-app handle. Used for kiosk-mode visibility.
+ */
+export type CustomAppUser = {
+  user: string;
+  app: string;
+};
+
+/**
+ * A team → custom-app attachment. `team` is a team name; `app` is a
+ * custom-app handle. Used for non-kiosk visibility filtering — every
+ * member of the team can see the app on their dashboard.
+ */
+export type CustomAppTeam = {
+  team: string;
+  app: string;
+};
+
+export function defineTeams(teams: Team[]): Tagged<{ teams: Team[] }, "teams"> {
+  return Object.assign({}, { teams }, { [KIND_TAG]: "teams" as const });
+}
+
+export function defineCustomAppUsers(
+  bindings: CustomAppUser[],
+): Tagged<{ bindings: CustomAppUser[] }, "custom_app_users"> {
+  return Object.assign({}, { bindings }, { [KIND_TAG]: "custom_app_users" as const });
+}
+
+export function defineCustomAppTeams(
+  bindings: CustomAppTeam[],
+): Tagged<{ bindings: CustomAppTeam[] }, "custom_app_teams"> {
+  return Object.assign({}, { bindings }, { [KIND_TAG]: "custom_app_teams" as const });
 }
 
 // ──────────────────────────────────────────────────────────────────────

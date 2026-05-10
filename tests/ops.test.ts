@@ -229,4 +229,102 @@ export default defineDevices([
     );
     await expect(loadOps(root)).rejects.toThrow(/Duplicate device identifier 'd'/);
   });
+
+  test("loads teams + custom-app bindings", async () => {
+    writeFileSync(
+      join(root, "teams.ts"),
+      `import { defineTeams } from "${DEFINE_PATH}";
+export default defineTeams([
+  {
+    name: "press-operators",
+    description: "Press floor crew",
+    members: ["alice@acme.com", "bob@acme.com"],
+  },
+  { name: "shipping" },
+]);
+`,
+    );
+    writeFileSync(
+      join(root, "custom_app_users.ts"),
+      `import { defineCustomAppUsers } from "${DEFINE_PATH}";
+export default defineCustomAppUsers([
+  { user: "alice@acme.com", app: "job-board" },
+]);
+`,
+    );
+    writeFileSync(
+      join(root, "custom_app_teams.ts"),
+      `import { defineCustomAppTeams } from "${DEFINE_PATH}";
+export default defineCustomAppTeams([
+  { team: "press-operators", app: "press-dashboard" },
+]);
+`,
+    );
+
+    const ops = await loadOps(root);
+    expect(ops.teams).toHaveLength(2);
+    expect(ops.teams[0]?.name).toBe("press-operators");
+    expect(ops.teams[0]?.members).toEqual(["alice@acme.com", "bob@acme.com"]);
+    expect(ops.teams[1]?.members).toBeUndefined();
+    expect(ops.customAppUsers).toHaveLength(1);
+    expect(ops.customAppUsers[0]).toEqual({ user: "alice@acme.com", app: "job-board" });
+    expect(ops.customAppTeams).toHaveLength(1);
+    expect(ops.customAppTeams[0]).toEqual({ team: "press-operators", app: "press-dashboard" });
+    expect(ops.files.teams).toBeDefined();
+    expect(ops.files.customAppUsers).toBeDefined();
+    expect(ops.files.customAppTeams).toBeDefined();
+  });
+
+  test("rejects duplicate team names", async () => {
+    writeFileSync(
+      join(root, "teams.ts"),
+      `import { defineTeams } from "${DEFINE_PATH}";
+export default defineTeams([
+  { name: "t" },
+  { name: "t" },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate team name 't'/);
+  });
+
+  test("rejects duplicate members within a single team", async () => {
+    writeFileSync(
+      join(root, "teams.ts"),
+      `import { defineTeams } from "${DEFINE_PATH}";
+export default defineTeams([
+  { name: "t", members: ["alice@acme.com", "alice@acme.com"] },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(
+      /Duplicate member 'alice@acme.com' in team 't'/,
+    );
+  });
+
+  test("rejects duplicate custom-app-user bindings", async () => {
+    writeFileSync(
+      join(root, "custom_app_users.ts"),
+      `import { defineCustomAppUsers } from "${DEFINE_PATH}";
+export default defineCustomAppUsers([
+  { user: "u@x", app: "a" },
+  { user: "u@x", app: "a" },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate custom-app-user binding u@x → a/);
+  });
+
+  test("rejects duplicate custom-app-team bindings", async () => {
+    writeFileSync(
+      join(root, "custom_app_teams.ts"),
+      `import { defineCustomAppTeams } from "${DEFINE_PATH}";
+export default defineCustomAppTeams([
+  { team: "t", app: "a" },
+  { team: "t", app: "a" },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate custom-app-team binding t → a/);
+  });
 });

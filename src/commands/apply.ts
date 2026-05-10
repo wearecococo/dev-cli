@@ -1,32 +1,46 @@
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
+  addTeamMember,
+  attachCustomAppTeam,
+  attachCustomAppUser,
   attachPolicy,
   createIAMPolicy,
+  getCustomAppByHandle,
   getDeviceByIdentifier,
   getIAMPolicy,
   getNetworkByName,
+  getTeamByName,
+  getTeamMembers,
   getUserByEmail,
+  listCustomAppTeams,
+  listCustomAppUsers,
   listUserPolicies,
+  removeTeamMember,
   updateIAMPolicy,
   upsertDevice,
   upsertNetwork,
+  upsertTeam,
   upsertUser,
   type IAMDocument,
   type IAMPolicyState,
   type InboundProtocolConfig,
   type NetworkState,
   type OutboundProtocolConfig,
+  type TeamState,
   type UserState,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { loadOps, type LoadedOps } from "../ops.ts";
 import type {
   Binding,
+  CustomAppTeam,
+  CustomAppUser,
   Device,
   IAMPolicy,
   InboundProtocol,
   Network,
   OutboundProtocol,
+  Team,
   User,
 } from "../define.ts";
 
@@ -46,7 +60,8 @@ export async function runApply(overrides: ConfigOverrides): Promise<void> {
   if (Object.values(ops.files).every((v) => v === undefined)) {
     console.log(
       `No ops files found in ${process.cwd()}. Expected one of: ` +
-        `users.ts, iam_policies.ts, bindings.ts, networks.ts, devices.ts.`,
+        `users.ts, iam_policies.ts, bindings.ts, networks.ts, devices.ts, ` +
+        `teams.ts, custom_app_users.ts, custom_app_teams.ts.`,
     );
     return;
   }
@@ -57,6 +72,9 @@ export async function runApply(overrides: ConfigOverrides): Promise<void> {
   await applyBindings(client, ops.bindings, usersByEmail, policiesById, ops);
   const networksByName = await applyNetworks(client, ops.networks);
   await applyDevices(client, ops.devices, networksByName, ops);
+  const teamsByName = await applyTeams(client, ops.teams, usersByEmail, ops);
+  await applyCustomAppUsers(client, ops.customAppUsers, usersByEmail, ops);
+  await applyCustomAppTeams(client, ops.customAppTeams, teamsByName, ops);
 
   reportSummary(ops);
 }
@@ -331,6 +349,224 @@ function toInboundWire(p: InboundProtocol): InboundProtocolConfig {
   return { kind: "HTTP", label: p.label, webhookPath: p.webhookPath };
 }
 
+/**
+ * Apply teams + their member lists. The team row itself is additive
+ * (declared teams get upserted, undeclared ones are left alone). The
+ * inline `members: [email]` list, however, is the *canonical* set for
+ * that team — applied as a reconcile: declared members get added,
+ * server-side members not in the list get removed. Undeclared teams
+ * are not touched.
+ *
+ * Member emails resolve in the same belt-and-braces order as policy
+ * bindings: locally declared users first (from `applyUsers`), then a
+ * server lookup. Refs that resolve neither way fail loudly.
+ */
+async function applyTeams(
+  client: GraphQLClient,
+  teams: Team[],
+  usersByEmail: Map<string, UserState>,
+  ops: LoadedOps,
+): Promise<Map<string, TeamState>> {
+  const out = new Map<string, TeamState>();
+  for (const t of teams) {
+    const existing = await getTeamByName(client, t.name);
+    const team = await upsertTeam(client, {
+      id: existing?.id,
+      name: t.name,
+      description: t.description,
+    });
+    console.log(`  team ${existing ? "~" : "+"} ${t.name}`);
+    out.set(t.name, team);
+
+    if (t.members === undefined) continue;
+    await reconcileTeamMembers(client, team, t.members, usersByEmail, ops);
+  }
+  return out;
+}
+
+async function reconcileTeamMembers(
+  client: GraphQLClient,
+  team: TeamState,
+  declared: string[],
+  usersByEmail: Map<string, UserState>,
+  ops: LoadedOps,
+): Promise<void> {
+  const declaredIds = new Map<string, string>();
+  for (const email of new Set(declared)) {
+    const local = usersByEmail.get(email);
+    if (local) {
+      declaredIds.set(email, local.id);
+      continue;
+    }
+    const remote = await getUserByEmail(client, email);
+    if (!remote) {
+      const hint = ops.files.teams ? ` declared in ${ops.files.teams}` : "";
+      throw new Error(
+        `Team '${team.name}' member '${email}' doesn't exist${hint} or on the server.`,
+      );
+    }
+    declaredIds.set(email, remote.id);
+  }
+
+  const current = await getTeamMembers(client, team.id);
+  const currentIds = new Set(current.map((m) => m.id));
+  const declaredIdSet = new Set(declaredIds.values());
+
+  for (const [email, userId] of declaredIds) {
+    if (currentIds.has(userId)) continue;
+    await addTeamMember(client, { teamId: team.id, userId });
+    console.log(`    member + ${email}`);
+  }
+  for (const m of current) {
+    if (declaredIdSet.has(m.id)) continue;
+    await removeTeamMember(client, { teamId: team.id, userId: m.id });
+    console.log(`    member - ${m.email}`);
+  }
+}
+
+/**
+ * Apply user → custom-app bindings. Additive — declared rows get
+ * attached if missing, others are left alone. Use
+ * `cococo delete custom-app-user <email> <app-handle>` to detach.
+ */
+async function applyCustomAppUsers(
+  client: GraphQLClient,
+  rows: CustomAppUser[],
+  usersByEmail: Map<string, UserState>,
+  ops: LoadedOps,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const userId = await resolveByKey(
+    rows.map((r) => r.user),
+    new Map([...usersByEmail].map(([email, u]) => [email, u.id])),
+    async (email) => (await getUserByEmail(client, email))?.id,
+    "user",
+    ops.files.customAppUsers,
+  );
+  const appId = await resolveAppHandles(
+    client,
+    rows.map((r) => r.app),
+    ops.files.customAppUsers,
+  );
+
+  // Bulk-fetch existing bindings per app so we don't issue redundant
+  // attachCustomAppUser calls when reapplying the same file.
+  const existingByApp = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const aid = appId.get(r.app)!;
+    let cached = existingByApp.get(aid);
+    if (!cached) {
+      const bindings = await listCustomAppUsers(client, { customAppId: aid });
+      cached = new Set(bindings.map((b) => b.userId));
+      existingByApp.set(aid, cached);
+    }
+    const uid = userId.get(r.user)!;
+    if (cached.has(uid)) {
+      console.log(`  app-user = ${r.user} → ${r.app}`);
+      continue;
+    }
+    await attachCustomAppUser(client, { customAppId: aid, userId: uid });
+    cached.add(uid);
+    console.log(`  app-user + ${r.user} → ${r.app}`);
+  }
+}
+
+/**
+ * Apply team → custom-app bindings. Additive in the same shape as
+ * `applyCustomAppUsers`; team handles resolve via `getTeamByName`.
+ */
+async function applyCustomAppTeams(
+  client: GraphQLClient,
+  rows: CustomAppTeam[],
+  teamsByName: Map<string, TeamState>,
+  ops: LoadedOps,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const teamId = await resolveByKey(
+    rows.map((r) => r.team),
+    new Map([...teamsByName].map(([n, t]) => [n, t.id])),
+    async (name) => (await getTeamByName(client, name))?.id,
+    "team",
+    ops.files.customAppTeams,
+  );
+  const appId = await resolveAppHandles(
+    client,
+    rows.map((r) => r.app),
+    ops.files.customAppTeams,
+  );
+
+  const existingByApp = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const aid = appId.get(r.app)!;
+    let cached = existingByApp.get(aid);
+    if (!cached) {
+      const bindings = await listCustomAppTeams(client, { customAppId: aid });
+      cached = new Set(bindings.map((b) => b.teamId));
+      existingByApp.set(aid, cached);
+    }
+    const tid = teamId.get(r.team)!;
+    if (cached.has(tid)) {
+      console.log(`  app-team = ${r.team} → ${r.app}`);
+      continue;
+    }
+    await attachCustomAppTeam(client, { customAppId: aid, teamId: tid });
+    cached.add(tid);
+    console.log(`  app-team + ${r.team} → ${r.app}`);
+  }
+}
+
+/**
+ * Resolve a list of custom-app handles to their server IDs. Caches
+ * each lookup so re-used handles don't re-query.
+ */
+async function resolveAppHandles(
+  client: GraphQLClient,
+  handles: string[],
+  source: string | undefined,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const handle of new Set(handles)) {
+    const app = await getCustomAppByHandle(client, handle);
+    if (!app) {
+      const hint = source ? ` (referenced from ${source})` : "";
+      throw new Error(
+        `Custom app '${handle}' doesn't exist on the server${hint}. ` +
+          `Push the app first with 'cococo push ${handle}', then re-run apply.`,
+      );
+    }
+    out.set(handle, app.id);
+  }
+  return out;
+}
+
+/** Generic resolver for natural-key → server-id lookups. */
+async function resolveByKey(
+  keys: string[],
+  local: Map<string, string>,
+  remote: (key: string) => Promise<string | undefined>,
+  label: string,
+  source: string | undefined,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const key of new Set(keys)) {
+    const localHit = local.get(key);
+    if (localHit !== undefined) {
+      out.set(key, localHit);
+      continue;
+    }
+    const remoteHit = await remote(key);
+    if (remoteHit !== undefined) {
+      out.set(key, remoteHit);
+      continue;
+    }
+    const hint = source ? ` declared in ${source}` : "";
+    throw new Error(
+      `Reference to ${label} '${key}' that doesn't exist locally${hint} or on the server.`,
+    );
+  }
+  return out;
+}
+
 function reportSummary(ops: LoadedOps): void {
   const parts: string[] = [];
   if (ops.users.length > 0) parts.push(`${ops.users.length} user(s)`);
@@ -338,5 +574,8 @@ function reportSummary(ops: LoadedOps): void {
   if (ops.bindings.length > 0) parts.push(`${ops.bindings.length} binding(s)`);
   if (ops.networks.length > 0) parts.push(`${ops.networks.length} network(s)`);
   if (ops.devices.length > 0) parts.push(`${ops.devices.length} device(s)`);
+  if (ops.teams.length > 0) parts.push(`${ops.teams.length} team(s)`);
+  if (ops.customAppUsers.length > 0) parts.push(`${ops.customAppUsers.length} app-user(s)`);
+  if (ops.customAppTeams.length > 0) parts.push(`${ops.customAppTeams.length} app-team(s)`);
   console.log(`Applied ${parts.join(", ")}.`);
 }

@@ -3,16 +3,31 @@ import {
   deleteDevice,
   deleteIAMPolicy,
   deleteNetwork,
+  deleteTeam,
   deleteUser,
+  detachCustomAppTeam,
+  detachCustomAppUser,
   detachPolicy,
+  getCustomAppByHandle,
   getDeviceByIdentifier,
   getIAMPolicy,
   getNetworkByName,
+  getTeamByName,
   getUserByEmail,
+  removeTeamMember,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 
-export type DeleteKind = "user" | "policy" | "binding" | "network" | "device";
+export type DeleteKind =
+  | "user"
+  | "policy"
+  | "binding"
+  | "network"
+  | "device"
+  | "team"
+  | "team-member"
+  | "custom-app-user"
+  | "custom-app-team";
 
 /**
  * Remove a tenant-IAM resource from the platform. The flat ops files
@@ -56,8 +71,35 @@ export async function runDelete(
     await deleteDeviceByIdentifier(client, args[0]!);
     return;
   }
+  if (kind === "team") {
+    if (args.length !== 1) throw new Error(`cococo delete team <name> — got ${args.length} arg(s).`);
+    await deleteTeamByName(client, args[0]!);
+    return;
+  }
+  if (kind === "team-member") {
+    if (args.length !== 2) {
+      throw new Error(`cococo delete team-member <team-name> <email> — got ${args.length} arg(s).`);
+    }
+    await deleteTeamMember(client, args[0]!, args[1]!);
+    return;
+  }
+  if (kind === "custom-app-user") {
+    if (args.length !== 2) {
+      throw new Error(`cococo delete custom-app-user <email> <app-handle> — got ${args.length} arg(s).`);
+    }
+    await deleteAppUser(client, args[0]!, args[1]!);
+    return;
+  }
+  if (kind === "custom-app-team") {
+    if (args.length !== 2) {
+      throw new Error(`cococo delete custom-app-team <team-name> <app-handle> — got ${args.length} arg(s).`);
+    }
+    await deleteAppTeam(client, args[0]!, args[1]!);
+    return;
+  }
   throw new Error(
-    `cococo delete: unknown kind '${kind}'. Use user | policy | binding | network | device.`,
+    `cococo delete: unknown kind '${kind}'. Use user | policy | binding | network | device | ` +
+      `team | team-member | custom-app-user | custom-app-team.`,
   );
 }
 
@@ -121,4 +163,57 @@ async function deleteBinding(
   await detachPolicy(client, { userId: user.id, policyId: policy.id });
   console.log(`Detached policy ${policyHandle} from ${email}.`);
   console.log(`  Remember to remove the entry from bindings.ts to keep apply consistent.`);
+}
+
+async function deleteTeamByName(client: GraphQLClient, name: string): Promise<void> {
+  const team = await getTeamByName(client, name);
+  if (!team) {
+    console.log(`No team found with name '${name}'.`);
+    return;
+  }
+  await deleteTeam(client, team.id);
+  console.log(`Deleted team ${name} (${team.id}).`);
+  console.log(`  Remember to remove the entry from teams.ts to keep apply consistent.`);
+}
+
+async function deleteTeamMember(
+  client: GraphQLClient,
+  teamName: string,
+  email: string,
+): Promise<void> {
+  const team = await getTeamByName(client, teamName);
+  if (!team) throw new Error(`No team found with name '${teamName}'.`);
+  const user = await getUserByEmail(client, email);
+  if (!user) throw new Error(`No user found with email '${email}'.`);
+  await removeTeamMember(client, { teamId: team.id, userId: user.id });
+  console.log(`Removed ${email} from team '${teamName}'.`);
+  console.log(`  Remember to remove the entry from teams.ts to keep apply consistent.`);
+}
+
+async function deleteAppUser(
+  client: GraphQLClient,
+  email: string,
+  appHandle: string,
+): Promise<void> {
+  const user = await getUserByEmail(client, email);
+  if (!user) throw new Error(`No user found with email '${email}'.`);
+  const app = await getCustomAppByHandle(client, appHandle);
+  if (!app) throw new Error(`No custom app found with handle '${appHandle}'.`);
+  await detachCustomAppUser(client, { customAppId: app.id, userId: user.id });
+  console.log(`Detached user ${email} from custom app '${appHandle}'.`);
+  console.log(`  Remember to remove the entry from custom_app_users.ts to keep apply consistent.`);
+}
+
+async function deleteAppTeam(
+  client: GraphQLClient,
+  teamName: string,
+  appHandle: string,
+): Promise<void> {
+  const team = await getTeamByName(client, teamName);
+  if (!team) throw new Error(`No team found with name '${teamName}'.`);
+  const app = await getCustomAppByHandle(client, appHandle);
+  if (!app) throw new Error(`No custom app found with handle '${appHandle}'.`);
+  await detachCustomAppTeam(client, { customAppId: app.id, teamId: team.id });
+  console.log(`Detached team '${teamName}' from custom app '${appHandle}'.`);
+  console.log(`  Remember to remove the entry from custom_app_teams.ts to keep apply consistent.`);
 }

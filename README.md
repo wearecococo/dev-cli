@@ -16,6 +16,7 @@ builds apps can also configure the platform from the same repo.
 - [Authoring an edge app](#authoring-an-edge-app)
 - [Tenant IAM (users + policies)](#tenant-iam-users--policies)
 - [Networks + devices](#networks--devices)
+- [Teams + custom-app assignments](#teams--custom-app-assignments)
 - [Daily workflow](#daily-workflow)
 - [Migrating v1 integrations](#migrating-v1-integrations)
 - [Reference](#reference)
@@ -519,6 +520,87 @@ to per-installation tenant config.
 or `cococo delete device <identifier>` to take rows off the server,
 then drop the local entry to keep the next apply consistent.
 
+## Teams + custom-app assignments
+
+Teams group users for collaboration and bulk app assignment. Custom
+apps can be assigned to individual users (kiosk mode) or to teams
+(non-kiosk visibility filtering on dashboards). Three flat files at
+the repo root:
+
+```
+teams.ts             # who's on which team (with inline members)
+custom_app_users.ts  # which user can see which app
+custom_app_teams.ts  # which team can see which app
+```
+
+```ts
+// teams.ts
+import { defineTeams } from "@wearecococo/dev-cli/define";
+export default defineTeams([
+  {
+    name: "press-operators",
+    description: "Press floor crew",
+    members: ["alice@acme.com", "bob@acme.com"],
+  },
+  { name: "shipping" },           // declare team but skip member reconcile
+]);
+```
+
+```ts
+// custom_app_users.ts
+import { defineCustomAppUsers } from "@wearecococo/dev-cli/define";
+export default defineCustomAppUsers([
+  { user: "alice@acme.com", app: "job-board" },
+]);
+```
+
+```ts
+// custom_app_teams.ts
+import { defineCustomAppTeams } from "@wearecococo/dev-cli/define";
+export default defineCustomAppTeams([
+  { team: "press-operators", app: "press-dashboard" },
+]);
+```
+
+Apply runs in dependency order — users → teams → app bindings — so
+member emails and team-name refs resolve before they're needed:
+
+```sh
+bunx cococo apply
+# →   team + press-operators
+#       member + alice@acme.com
+#       member + bob@acme.com
+#     team + shipping
+#     app-user + alice@acme.com → job-board
+#     app-team + press-operators → press-dashboard
+```
+
+**Two semantics, one command.** Most ops kinds are *additive at the
+row level* (declared rows get attached, others left alone). Team
+`members` are different: the inline list is the *canonical* membership
+for that declared team — if you remove someone from `members`, the
+next apply detaches them from that team. The team row itself is still
+additive: undeclared teams in `teams.ts` are not deleted from the
+server.
+
+| Kind | Apply semantics |
+|---|---|
+| Team row | Additive — undeclared teams left alone |
+| Team `members` | Reconciled within each declared team |
+| `custom_app_users` row | Additive |
+| `custom_app_teams` row | Additive |
+
+**Removals.** `cococo delete team <name>`,
+`cococo delete team-member <team> <email>`,
+`cococo delete custom-app-user <email> <app>`,
+`cococo delete custom-app-team <team> <app>`. Local files are not
+edited — drop the entry yourself afterwards.
+
+**Custom-app refs.** `app` references in `custom_app_users.ts` and
+`custom_app_teams.ts` are custom-app handles (matching
+`custom_apps/<handle>/manifest.ts`). The app must already exist on the
+server (`cococo push <handle>` first); apply doesn't create apps.
+
 ## Daily workflow
 
 These commands work the same way for all three kinds — they dispatch by
@@ -635,6 +717,9 @@ iam_policies.ts                            # defineIAMPolicies([...])
 bindings.ts                                # defineBindings([...])
 networks.ts                                # defineNetworks([...])
 devices.ts                                 # defineDevices([...])
+teams.ts                                   # defineTeams([...])
+custom_app_users.ts                        # defineCustomAppUsers([...])
+custom_app_teams.ts                        # defineCustomAppTeams([...])
 ```
 
 ### Commands
@@ -650,8 +735,8 @@ devices.ts                                 # defineDevices([...])
 | `cococo validate [folder]` | Server-validate the remote draft (integrations only) |
 | `cococo publish [folder]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED) |
 | `cococo deprecate [folder]` | Retire the PUBLISHED definition. Integrations: ACTIVE → DEPRECATED. Edge apps: PUBLISHED → DEPRECATED. Existing installations keep working until upgraded. Custom apps don't apply |
-| `cococo apply` | Apply tenant ops files at the repo root (`users.ts`, `iam_policies.ts`, `bindings.ts`, `networks.ts`, `devices.ts`). Additive: upserts what's declared, never deletes |
-| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `binding <email> <policy-handle>`, `network <name>`, `device <identifier>` |
+| `cococo apply` | Apply tenant ops files at the repo root. Mostly additive (upserts what's declared); team `members` lists reconcile within each declared team |
+| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user <email> <app>`, `custom-app-team <team> <app>` |
 | `cococo pull <id\|handle> [--type app\|edge] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |
