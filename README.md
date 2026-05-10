@@ -2,7 +2,9 @@
 
 Author cococo platform **integrations**, **custom apps**, and **edge
 apps** locally — TypeScript manifests, real Lua files, server-side
-validation, and a tight push / lint / publish loop.
+validation, and a tight push / lint / publish loop. Plus declarative
+**tenant IAM** (users, policies, attachments) so the same team that
+builds apps can also configure the platform from the same repo.
 
 ## Contents
 
@@ -12,6 +14,7 @@ validation, and a tight push / lint / publish loop.
 - [Authoring an integration](#authoring-an-integration)
 - [Authoring a custom app](#authoring-a-custom-app)
 - [Authoring an edge app](#authoring-an-edge-app)
+- [Tenant IAM (users + policies)](#tenant-iam-users--policies)
 - [Daily workflow](#daily-workflow)
 - [Migrating v1 integrations](#migrating-v1-integrations)
 - [Reference](#reference)
@@ -348,6 +351,79 @@ secrets stay on the controller side.
 
 See the platform docs for the full per-protocol field reference.
 
+## Tenant IAM (users + policies)
+
+Users and IAM policies are tenant-level configuration, not artifacts —
+they don't have a folder layout, lifecycle, or Lua bodies. They live in
+flat per-kind files at the **repo root**, applied with `cococo apply`:
+
+```
+users.ts            # who can sign in
+iam_policies.ts     # what they can do
+bindings.ts         # who has which policy
+```
+
+Each file default-exports the result of a corresponding `defineX(…)`:
+
+```ts
+// users.ts
+import { defineUsers } from "@wearecococo/dev-cli/define";
+export default defineUsers([
+  { email: "alice@acme.com", name: "Alice", kind: "HUMAN" },
+  { email: "bot@acme.com",   name: "Webhook Bot", kind: "BOT", externalId: "svc_001" },
+]);
+```
+
+```ts
+// iam_policies.ts
+import { defineIAMPolicies } from "@wearecococo/dev-cli/define";
+export default defineIAMPolicies([
+  {
+    handle: "press-operator",
+    name: "Press Operator",
+    description: "Run jobs on the press floor",
+    statements: [
+      { effect: "ALLOW", actions: ["job:read", "job:transition"], resources: ["*"] },
+    ],
+  },
+]);
+```
+
+```ts
+// bindings.ts
+import { defineBindings } from "@wearecococo/dev-cli/define";
+export default defineBindings([
+  { user: "alice@acme.com", policy: "press-operator" },
+]);
+```
+
+Apply (additively) with:
+
+```sh
+bunx cococo apply
+# →   policy + press-operator (Press Operator)
+#     user   + alice@acme.com (Alice)
+#     binding+ alice@acme.com → press-operator
+#     Applied 1 user(s), 1 policy, 1 binding(s).
+```
+
+`apply` upserts what's declared and **never deletes** — re-running with
+a missing entry leaves the server alone. Remove entries explicitly:
+
+```sh
+bunx cococo delete user alice@acme.com
+bunx cococo delete policy press-operator
+bunx cococo delete binding alice@acme.com press-operator
+```
+
+Local files are not edited by `delete` — drop the entry yourself to
+keep the next `apply` consistent.
+
+**Resolution rules.** Email is the natural key for users (unique per
+tenant); `handle` is a stable custom ID for policies. Bindings reference
+by these natural keys, and the loader rejects bindings that point at
+entities not declared locally **and** not present on the server.
+
 ## Daily workflow
 
 These commands work the same way for all three kinds — they dispatch by
@@ -457,6 +533,11 @@ on PATH, you get the skeleton plus a self-contained prompt at
         ├── handlers/<name>.lua
         ├── libraries/<name>.lua           # optional
         └── onMessage.lua                  # optional
+
+# Tenant IAM lives at the repo root as flat per-kind files:
+users.ts                                   # defineUsers([...])
+iam_policies.ts                            # defineIAMPolicies([...])
+bindings.ts                                # defineBindings([...])
 ```
 
 ### Commands
@@ -472,6 +553,8 @@ on PATH, you get the skeleton plus a self-contained prompt at
 | `cococo validate [folder]` | Server-validate the remote draft (integrations only) |
 | `cococo publish [folder]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED) |
 | `cococo deprecate [folder]` | Retire the PUBLISHED definition. Integrations: ACTIVE → DEPRECATED. Edge apps: PUBLISHED → DEPRECATED. Existing installations keep working until upgraded. Custom apps don't apply |
+| `cococo apply` | Apply tenant-IAM ops files (`users.ts`, `iam_policies.ts`, `bindings.ts`) at the repo root. Additive: upserts what's declared, never deletes |
+| `cococo delete user\|policy\|binding <args>` | Remove a tenant-IAM resource. `user <email>`, `policy <handle>`, `binding <email> <policy-handle>` |
 | `cococo pull <id\|handle> [--type app\|edge] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |

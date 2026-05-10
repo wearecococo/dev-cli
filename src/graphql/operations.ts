@@ -1042,3 +1042,271 @@ export async function deprecateEdgeApp(
   }
   return data.deprecateEdgeApp.edgeApp;
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Tenant IAM: users, policies, attachments. Authored as flat per-kind
+// files (`users.ts`, `iam_policies.ts`, `bindings.ts`) and applied
+// additively — push upserts what's declared, never deletes. Use the
+// explicit `cococo delete` command to remove.
+// ──────────────────────────────────────────────────────────────────────
+
+export type UserKind = "HUMAN" | "BOT" | "KIOSK";
+
+export type UserState = {
+  id: string;
+  externalId?: string | null;
+  email: string;
+  name?: string | null;
+  kind: UserKind;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const USER_FIELDS = `id externalId email name kind createdAt updatedAt`;
+
+export async function listUsers(
+  client: GraphQLClient,
+  filter?: { email?: string },
+): Promise<UserState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.email) filterArg.email = { eq: filter.email };
+  const query = `
+    query ListUsers($filter: UserFilterInput) {
+      listUsers(first: 500, filter: $filter) {
+        edges { node { ${USER_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listUsers: { edges: { node: UserState }[] };
+  }>(query, { filter: filterArg });
+  return data.listUsers.edges.map((e) => e.node);
+}
+
+export async function getUserByEmail(
+  client: GraphQLClient,
+  email: string,
+): Promise<UserState | undefined> {
+  const matches = await listUsers(client, { email });
+  return matches[0];
+}
+
+export async function upsertUser(
+  client: GraphQLClient,
+  input: {
+    id?: string;
+    email: string;
+    name?: string;
+    kind?: UserKind;
+    externalId?: string;
+  },
+): Promise<UserState> {
+  const query = `
+    mutation UpsertUser($input: UpsertUserInput!) {
+      upsertUser(input: $input) {
+        user { ${USER_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertUser: { user: UserState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.upsertUser.errors.length > 0) {
+    const summary = data.upsertUser.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`upsertUser failed: ${summary}`);
+  }
+  if (!data.upsertUser.user) {
+    throw new Error(`upsertUser returned no user and no errors.`);
+  }
+  return data.upsertUser.user;
+}
+
+export async function deleteUser(client: GraphQLClient, id: string): Promise<void> {
+  const query = `mutation DeleteUser($id: UserID!) { deleteUser(id: $id) { id } }`;
+  await client.request(query, { id });
+}
+
+export type IAMEffect = "ALLOW" | "DENY";
+
+export type IAMStatement = {
+  effect: IAMEffect;
+  actions: string[];
+  resources: string[];
+};
+
+export type IAMDocument = {
+  version: string;
+  statements: IAMStatement[];
+};
+
+export type IAMPolicyState = {
+  id: string;
+  name: string;
+  description?: string | null;
+  document: IAMDocument;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const POLICY_FIELDS = `
+  id name description createdAt updatedAt
+  document { version statements { effect actions resources } }
+`;
+
+export async function listIAMPolicies(client: GraphQLClient): Promise<IAMPolicyState[]> {
+  const query = `
+    query ListIAMPolicies {
+      listIAMPolicies(first: 500) {
+        edges { node { ${POLICY_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listIAMPolicies: { edges: { node: IAMPolicyState }[] };
+  }>(query, {});
+  return data.listIAMPolicies.edges.map((e) => e.node);
+}
+
+export async function getIAMPolicy(
+  client: GraphQLClient,
+  id: string,
+): Promise<IAMPolicyState | undefined> {
+  const query = `
+    query GetIAMPolicy($id: IAMPolicyID!) {
+      getIAMPolicy(id: $id) { ${POLICY_FIELDS} }
+    }
+  `;
+  const data = await client.request<{ getIAMPolicy: IAMPolicyState | null }>(query, { id });
+  return data.getIAMPolicy ?? undefined;
+}
+
+export async function createIAMPolicy(
+  client: GraphQLClient,
+  input: {
+    id?: string;
+    name: string;
+    description?: string;
+    document: IAMDocument;
+  },
+): Promise<IAMPolicyState> {
+  const query = `
+    mutation CreateIAMPolicy($input: CreateIAMPolicyInput!) {
+      createIAMPolicy(input: $input) {
+        policy { ${POLICY_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    createIAMPolicy: { policy: IAMPolicyState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.createIAMPolicy.errors.length > 0) {
+    const summary = data.createIAMPolicy.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`createIAMPolicy failed: ${summary}`);
+  }
+  if (!data.createIAMPolicy.policy) {
+    throw new Error(`createIAMPolicy returned no policy and no errors.`);
+  }
+  return data.createIAMPolicy.policy;
+}
+
+export async function updateIAMPolicy(
+  client: GraphQLClient,
+  input: {
+    id: string;
+    name?: string;
+    description?: string;
+    document?: IAMDocument;
+  },
+): Promise<IAMPolicyState> {
+  const query = `
+    mutation UpdateIAMPolicy($input: UpdateIAMPolicyInput!) {
+      updateIAMPolicy(input: $input) {
+        policy { ${POLICY_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    updateIAMPolicy: { policy: IAMPolicyState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.updateIAMPolicy.errors.length > 0) {
+    const summary = data.updateIAMPolicy.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`updateIAMPolicy failed: ${summary}`);
+  }
+  if (!data.updateIAMPolicy.policy) {
+    throw new Error(`updateIAMPolicy returned no policy and no errors.`);
+  }
+  return data.updateIAMPolicy.policy;
+}
+
+export async function deleteIAMPolicy(client: GraphQLClient, id: string): Promise<void> {
+  const query = `mutation DeleteIAMPolicy($id: IAMPolicyID!) { deleteIAMPolicy(id: $id) { id } }`;
+  await client.request(query, { id });
+}
+
+export async function listUserPolicies(
+  client: GraphQLClient,
+  userId: string,
+): Promise<IAMPolicyState[]> {
+  const query = `
+    query ListUserPolicies($userId: UserID!) {
+      listUserPolicies(userId: $userId) { ${POLICY_FIELDS} }
+    }
+  `;
+  const data = await client.request<{ listUserPolicies: IAMPolicyState[] }>(query, { userId });
+  return data.listUserPolicies;
+}
+
+export async function attachPolicy(
+  client: GraphQLClient,
+  input: { userId: string; policyId: string },
+): Promise<void> {
+  const query = `
+    mutation AttachPolicy($input: AttachPolicyInput!) {
+      attachPolicy(input: $input) {
+        success
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    attachPolicy: { success: boolean; errors: FieldError[] };
+  }>(query, { input });
+  if (data.attachPolicy.errors.length > 0) {
+    const summary = data.attachPolicy.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`attachPolicy failed: ${summary}`);
+  }
+  if (!data.attachPolicy.success) {
+    throw new Error(`attachPolicy returned success=false with no errors.`);
+  }
+}
+
+export async function detachPolicy(
+  client: GraphQLClient,
+  input: { userId: string; policyId: string },
+): Promise<void> {
+  const query = `
+    mutation DetachPolicy($input: DetachPolicyInput!) {
+      detachPolicy(input: $input) {
+        success
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    detachPolicy: { success: boolean; errors: FieldError[] };
+  }>(query, { input });
+  if (data.detachPolicy.errors.length > 0) {
+    const summary = data.detachPolicy.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`detachPolicy failed: ${summary}`);
+  }
+  if (!data.detachPolicy.success) {
+    throw new Error(`detachPolicy returned success=false with no errors.`);
+  }
+}

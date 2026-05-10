@@ -199,7 +199,13 @@ export type IntegrationDefinition = IntegrationV2;
  */
 const KIND_TAG = Symbol.for("@wearecococo/dev-cli/kind");
 
-export type ManifestKind = "integration" | "app" | "edge";
+export type ManifestKind =
+  | "integration"
+  | "app"
+  | "edge"
+  | "users"
+  | "iam_policies"
+  | "bindings";
 
 export type Tagged<T, K extends ManifestKind> = T & {
   readonly [KIND_TAG]: K;
@@ -208,7 +214,14 @@ export type Tagged<T, K extends ManifestKind> = T & {
 export function manifestKind(value: unknown): ManifestKind | undefined {
   if (value == null || typeof value !== "object") return undefined;
   const k = (value as Record<symbol, unknown>)[KIND_TAG];
-  return k === "integration" || k === "app" || k === "edge" ? k : undefined;
+  return k === "integration" ||
+    k === "app" ||
+    k === "edge" ||
+    k === "users" ||
+    k === "iam_policies" ||
+    k === "bindings"
+    ? k
+    : undefined;
 }
 
 /**
@@ -546,6 +559,80 @@ export function defineEdgeApp<H extends Record<string, LuaSource>>(
   spec: EdgeAppV2<H>,
 ): Tagged<EdgeAppV2<H>, "edge"> {
   return Object.assign({}, spec, { [KIND_TAG]: "edge" as const });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Tenant-config "ops" resources. Unlike integrations / custom apps /
+// edge apps, these aren't artifacts with a folder layout and a lifecycle
+// — they're declarative records describing tenant IAM. Authored as flat
+// per-kind files at the repo root: `users.ts`, `iam_policies.ts`,
+// `bindings.ts`. Push is additive (upserts what's declared, never
+// deletes); explicit `cococo delete` removes.
+// ──────────────────────────────────────────────────────────────────────
+
+export type UserKind = "HUMAN" | "BOT" | "KIOSK";
+
+/**
+ * A user account. `email` is the natural key (unique per tenant) — the
+ * loader uses it to resolve to a server-side `UserID` when pushing.
+ */
+export type UserSpec = {
+  email: string;
+  name?: string;
+  kind?: UserKind;
+  /** Identifier in an external system (HRIS, IdP). Optional. */
+  externalId?: string;
+};
+
+export type Effect = "ALLOW" | "DENY";
+
+export type IAMStatement = {
+  effect: Effect;
+  /** Action patterns, e.g. `["job:read", "job:transition"]`. */
+  actions: string[];
+  /** Resource patterns, e.g. `["*"]` or `["script:abc123"]`. */
+  resources: string[];
+};
+
+/**
+ * An IAM policy. `handle` is a stable tenant-local identifier — pushed
+ * as the policy's custom ID so the manifest survives create/update
+ * cycles without recording server-generated IDs.
+ */
+export type IAMPolicySpec = {
+  handle: string;
+  name: string;
+  description?: string;
+  statements: IAMStatement[];
+};
+
+/**
+ * A user → policy attachment. Both ends reference the natural key:
+ * `user` is an email (matches `UserSpec.email`), `policy` is a handle
+ * (matches `IAMPolicySpec.handle`). The loader cross-checks the refs
+ * against the same manifest's users/policies — pushing a binding for a
+ * user or policy that isn't declared locally only resolves if the row
+ * already exists on the server.
+ */
+export type BindingSpec = {
+  user: string;
+  policy: string;
+};
+
+export function defineUsers(users: UserSpec[]): Tagged<{ users: UserSpec[] }, "users"> {
+  return Object.assign({}, { users }, { [KIND_TAG]: "users" as const });
+}
+
+export function defineIAMPolicies(
+  policies: IAMPolicySpec[],
+): Tagged<{ policies: IAMPolicySpec[] }, "iam_policies"> {
+  return Object.assign({}, { policies }, { [KIND_TAG]: "iam_policies" as const });
+}
+
+export function defineBindings(
+  bindings: BindingSpec[],
+): Tagged<{ bindings: BindingSpec[] }, "bindings"> {
+  return Object.assign({}, { bindings }, { [KIND_TAG]: "bindings" as const });
 }
 
 // ──────────────────────────────────────────────────────────────────────

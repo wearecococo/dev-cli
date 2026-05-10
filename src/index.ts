@@ -8,6 +8,8 @@ import { runPush } from "./commands/push.ts";
 import { runValidate } from "./commands/validate.ts";
 import { runPublish } from "./commands/publish.ts";
 import { runDeprecate } from "./commands/deprecate.ts";
+import { runApply } from "./commands/apply.ts";
+import { runDelete, type DeleteKind } from "./commands/delete.ts";
 import { runPull } from "./commands/pull.ts";
 import { runMigrate } from "./commands/migrate.ts";
 import { runSetupMcp } from "./commands/setup-mcp.ts";
@@ -144,6 +146,30 @@ program
   .description("Validate and publish the remote draft for a local integration folder.")
   .action(async (folder: string | undefined) => {
     await runPublish(folder, apiOpts());
+  });
+
+program
+  .command("apply")
+  .description(
+    "Apply tenant-IAM ops files (users.ts, iam_policies.ts, bindings.ts) at the repo root. " +
+      "Additive: upserts what's declared, never deletes. Use 'cococo delete' for removals.",
+  )
+  .action(async () => {
+    await runApply(apiOpts());
+  });
+
+program
+  .command("delete <kind> [args...]")
+  .description(
+    "Delete a tenant-IAM resource on the server: user (by email), policy (by handle), " +
+      "or binding (by email + policy-handle). Local ops files are NOT edited — " +
+      "remove the entry yourself to keep the next apply consistent.",
+  )
+  .action(async (kind: string, args: string[]) => {
+    if (kind !== "user" && kind !== "policy" && kind !== "binding") {
+      throw new Error(`cococo delete: unknown kind '${kind}'. Use user | policy | binding.`);
+    }
+    await runDelete(kind as DeleteKind, args, apiOpts());
   });
 
 program
