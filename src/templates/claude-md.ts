@@ -32,14 +32,14 @@ root** (additive — won't delete anything you don't declare):
 \`\`\`
 users.ts                          # who can sign in
 iam_policies.ts                   # what they can do
-bindings.ts                       # which user has which policy
+iam_policy_bindings.ts            # which user has which policy
 
 networks.ts                       # logical groupings of devices/controllers
 devices.ts                        # IoT devices
 
 teams.ts                          # who's on which team (with inline members)
-custom_app_users.ts               # which user can see which custom app
-custom_app_teams.ts               # which team can see which custom app
+custom_app_user_bindings.ts       # which user can see which custom app
+custom_app_team_bindings.ts       # which team can see which custom app
 
 controllers.ts                    # bridge boxes (with inline IO/exec policy)
 controller_tokens.ts              # auth bundles for the bridge
@@ -125,7 +125,7 @@ the canonical reference.
   \`policy\` block has empty allowlists, which the bridge treats as
   "reject everything". Declare a policy when an edge app needs IO or
   exec.
-- **Custom-app refs in \`custom_app_users.ts\` / \`custom_app_teams.ts\`
+- **Custom-app refs in \`custom_app_user_bindings.ts\` / \`custom_app_team_bindings.ts\`
   point at custom-app handles.** The custom app must exist on the
   server first (\`cococo push <handle>\`); apply doesn't create apps.
 - **Controller tokens are one-shot.** The connect bundle is returned
@@ -148,7 +148,7 @@ the canonical reference.
 
 **Onboard a new operator:**
 1. Add to \`users.ts\`: \`{ email: "bob@acme.com", kind: "HUMAN" }\`
-2. Add to \`bindings.ts\`: \`{ user: "bob@acme.com", policy: "press-operator" }\`
+2. Add to \`iam_policy_bindings.ts\`: \`{ user: "bob@acme.com", policy: "press-operator" }\`
 3. Optionally add to a team in \`teams.ts\` \`members\` list
 4. \`cococo apply\`
 

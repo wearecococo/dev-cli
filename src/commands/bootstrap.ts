@@ -189,9 +189,9 @@ const OPS_STUBS: Array<[string, string]> = [
     ),
   ],
   [
-    "bindings.ts",
+    "iam_policy_bindings.ts",
     stub(
-      "defineBindings",
+      "defineIAMPolicyBindings",
       `// { user: "alice@acme.com", policy: "press-operator" },`,
     ),
   ],
@@ -231,16 +231,16 @@ const OPS_STUBS: Array<[string, string]> = [
     ),
   ],
   [
-    "custom_app_users.ts",
+    "custom_app_user_bindings.ts",
     stub(
-      "defineCustomAppUsers",
+      "defineCustomAppUserBindings",
       `// { user: "alice@acme.com", app: "job-board" },`,
     ),
   ],
   [
-    "custom_app_teams.ts",
+    "custom_app_team_bindings.ts",
     stub(
-      "defineCustomAppTeams",
+      "defineCustomAppTeamBindings",
       `// { team: "press-operators", app: "press-dashboard" },`,
     ),
   ],

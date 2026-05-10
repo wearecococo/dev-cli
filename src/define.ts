@@ -226,12 +226,12 @@ export type ManifestKind =
   | "edge"
   | "users"
   | "iam_policies"
-  | "bindings"
+  | "iam_policy_bindings"
   | "networks"
   | "devices"
   | "teams"
-  | "custom_app_users"
-  | "custom_app_teams"
+  | "custom_app_user_bindings"
+  | "custom_app_team_bindings"
   | "controllers"
   | "controller_tokens"
   | "edge_app_installations";
@@ -248,12 +248,12 @@ export function manifestKind(value: unknown): ManifestKind | undefined {
     k === "edge" ||
     k === "users" ||
     k === "iam_policies" ||
-    k === "bindings" ||
+    k === "iam_policy_bindings" ||
     k === "networks" ||
     k === "devices" ||
     k === "teams" ||
-    k === "custom_app_users" ||
-    k === "custom_app_teams" ||
+    k === "custom_app_user_bindings" ||
+    k === "custom_app_team_bindings" ||
     k === "controllers" ||
     k === "controller_tokens" ||
     k === "edge_app_installations"
@@ -596,11 +596,18 @@ export function defineEdgeApp<H extends Record<string, LuaSource>>(
 
 // ──────────────────────────────────────────────────────────────────────
 // Tenant-config "ops" resources. Unlike integrations / custom apps /
-// edge apps, these aren't artifacts with a folder layout and a lifecycle
-// — they're declarative records describing tenant IAM. Authored as flat
-// per-kind files at the repo root: `users.ts`, `iam_policies.ts`,
-// `bindings.ts`. Push is additive (upserts what's declared, never
-// deletes); explicit `cococo delete` removes.
+// edge apps, these aren't artifacts with a folder layout and a
+// lifecycle — they're declarative records describing tenant IAM,
+// networks, devices, controllers, and edge-app installations. Authored
+// as flat per-kind files at the repo root. Push is additive (upserts
+// what's declared, never deletes); explicit `cococo delete` removes.
+//
+// **Cross-resource refs.** Every reference between ops resources
+// accepts either a natural-key string OR the typed object itself —
+// passing the object lets TypeScript catch typos at compile time and
+// powers IDE rename refactoring. The natural key (email, handle,
+// name, identifier) is what the apply pass actually sends to the
+// server.
 // ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -636,16 +643,47 @@ export type IAMPolicy = {
 };
 
 /**
- * A user → policy attachment. Both ends reference the natural key:
- * `user` is an email (matches `User.email`), `policy` is a handle
- * (matches `IAMPolicy.handle`). The loader cross-checks the refs
- * against the same manifest's users/policies — pushing a binding for a
- * user or policy that isn't declared locally only resolves if the row
- * already exists on the server.
+ * Reference shorthands. Each accepts either the natural-key string or
+ * the typed object — pass the object when authoring (compile-time
+ * typo safety, rename refactoring) or a string when referencing
+ * something that lives on the server but not in this repo.
  */
-export type Binding = {
-  user: string;
-  policy: string;
+export type UserRef = string | User;
+export type IAMPolicyRef = string | IAMPolicy;
+export type NetworkRef = string | Network;
+export type ControllerRef = string | Controller;
+export type TeamRef = string | Team;
+
+/** Extract the natural-key email from a `UserRef`. */
+export function userEmail(ref: UserRef): string {
+  return typeof ref === "string" ? ref : ref.email;
+}
+/** Extract the natural-key handle from an `IAMPolicyRef`. */
+export function iamPolicyHandle(ref: IAMPolicyRef): string {
+  return typeof ref === "string" ? ref : ref.handle;
+}
+/** Extract the natural-key name from a `NetworkRef`. */
+export function networkName(ref: NetworkRef): string {
+  return typeof ref === "string" ? ref : ref.name;
+}
+/** Extract the natural-key handle from a `ControllerRef`. */
+export function controllerHandle(ref: ControllerRef): string {
+  return typeof ref === "string" ? ref : ref.handle;
+}
+/** Extract the natural-key name from a `TeamRef`. */
+export function teamName(ref: TeamRef): string {
+  return typeof ref === "string" ? ref : ref.name;
+}
+
+/**
+ * A user → policy attachment. Both ends accept either the natural-key
+ * string or the typed object. The apply pass resolves to the server-side
+ * IDs at push time; bindings that point at entities not declared
+ * locally must already exist on the server.
+ */
+export type IAMPolicyBinding = {
+  user: UserRef;
+  policy: IAMPolicyRef;
 };
 
 export function defineUsers(users: User[]): Tagged<{ users: User[] }, "users"> {
@@ -658,10 +696,10 @@ export function defineIAMPolicies(
   return Object.assign({}, { policies }, { [KIND_TAG]: "iam_policies" as const });
 }
 
-export function defineBindings(
-  bindings: Binding[],
-): Tagged<{ bindings: Binding[] }, "bindings"> {
-  return Object.assign({}, { bindings }, { [KIND_TAG]: "bindings" as const });
+export function defineIAMPolicyBindings(
+  bindings: IAMPolicyBinding[],
+): Tagged<{ bindings: IAMPolicyBinding[] }, "iam_policy_bindings"> {
+  return Object.assign({}, { bindings }, { [KIND_TAG]: "iam_policy_bindings" as const });
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -738,8 +776,8 @@ export type InboundProtocol =
 export type Device = {
   /** Natural key — pushed as the device's identifier (unique per tenant). */
   identifier: string;
-  /** Network reference by `name` (matches `Network.name`). Optional. */
-  network?: string;
+  /** Network reference (string `name`, or a typed `Network`). Optional. */
+  network?: NetworkRef;
   name?: string;
   description?: string;
   deviceType?: string;
@@ -780,33 +818,35 @@ export function defineDevices(
 
 /**
  * A team. `name` is the natural key (unique per tenant). `members` is
- * a list of user emails — the apply pass reconciles to this set
- * exactly: emails in the list get added, server-side members not in
- * the list get removed. Omit `members` to skip membership reconciliation
- * for this team (just upsert the team row itself).
+ * a list of user references (emails or `User` objects) — the apply
+ * pass reconciles to this set exactly: declared members get added,
+ * server-side members not in the list get removed. Omit `members` to
+ * skip membership reconciliation for this team (just upsert the team
+ * row itself).
  */
 export type Team = {
   name: string;
   description?: string;
-  members?: string[];
+  members?: UserRef[];
 };
 
 /**
- * A user → custom-app attachment. `user` is an email; `app` is a
- * custom-app handle. Used for kiosk-mode visibility.
+ * A user → custom-app attachment. `user` is a `UserRef`; `app` is a
+ * custom-app handle (string — custom apps live in `custom_apps/<handle>/`,
+ * not as ops objects). Used for kiosk-mode visibility.
  */
-export type CustomAppUser = {
-  user: string;
+export type CustomAppUserBinding = {
+  user: UserRef;
   app: string;
 };
 
 /**
- * A team → custom-app attachment. `team` is a team name; `app` is a
+ * A team → custom-app attachment. `team` is a `TeamRef`; `app` is a
  * custom-app handle. Used for non-kiosk visibility filtering — every
  * member of the team can see the app on their dashboard.
  */
-export type CustomAppTeam = {
-  team: string;
+export type CustomAppTeamBinding = {
+  team: TeamRef;
   app: string;
 };
 
@@ -814,16 +854,16 @@ export function defineTeams(teams: Team[]): Tagged<{ teams: Team[] }, "teams"> {
   return Object.assign({}, { teams }, { [KIND_TAG]: "teams" as const });
 }
 
-export function defineCustomAppUsers(
-  bindings: CustomAppUser[],
-): Tagged<{ bindings: CustomAppUser[] }, "custom_app_users"> {
-  return Object.assign({}, { bindings }, { [KIND_TAG]: "custom_app_users" as const });
+export function defineCustomAppUserBindings(
+  bindings: CustomAppUserBinding[],
+): Tagged<{ bindings: CustomAppUserBinding[] }, "custom_app_user_bindings"> {
+  return Object.assign({}, { bindings }, { [KIND_TAG]: "custom_app_user_bindings" as const });
 }
 
-export function defineCustomAppTeams(
-  bindings: CustomAppTeam[],
-): Tagged<{ bindings: CustomAppTeam[] }, "custom_app_teams"> {
-  return Object.assign({}, { bindings }, { [KIND_TAG]: "custom_app_teams" as const });
+export function defineCustomAppTeamBindings(
+  bindings: CustomAppTeamBinding[],
+): Tagged<{ bindings: CustomAppTeamBinding[] }, "custom_app_team_bindings"> {
+  return Object.assign({}, { bindings }, { [KIND_TAG]: "custom_app_team_bindings" as const });
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -855,8 +895,8 @@ export type ControllerPolicySpec = {
 export type Controller = {
   /** Natural key — pushed as the controller's handle. Lowercase alphanumeric/underscore/hyphen. */
   handle: string;
-  /** Network reference by `name` (matches `Network.name`). Optional. */
-  network?: string;
+  /** Network reference (string `name`, or a typed `Network`). Optional. */
+  network?: NetworkRef;
   name?: string;
   description?: string;
   host?: string;
@@ -881,7 +921,7 @@ export type Controller = {
  * before the next apply, since it's never returned again.
  */
 export type ControllerToken = {
-  controller: string;
+  controller: ControllerRef;
   name: string;
   description?: string;
   /** ISO8601. Optional — omit for non-expiring tokens. */
@@ -897,12 +937,13 @@ export type ControllerToken = {
  * controller.
  */
 export type EdgeAppInstallation = {
-  controller: string;
+  controller: ControllerRef;
+  /** Edge-app handle (string — edge apps live in `edge_apps/<handle>/`, not as ops objects). */
   app: string;
   /** Specific PUBLISHED version of the edge app to pin. */
   version: number;
-  /** Email of a `BOT` user; cloud-side IAM principal for `bridge.graphql` calls. */
-  botUser?: string;
+  /** A `BOT` user (email or `User` object); cloud-side IAM principal for `bridge.graphql` calls. */
+  botUser?: UserRef;
   isActive?: boolean;
   variables?: Record<string, unknown>;
 };

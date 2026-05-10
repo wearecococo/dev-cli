@@ -44,10 +44,10 @@ flat per-kind files at the repo root, applied with `cococo apply`:
 |---|---|
 | `users.ts` | People who can sign in to your tenant |
 | `iam_policies.ts` | What actions each role is allowed to take |
-| `bindings.ts` | Which user has which policy |
+| `iam_policy_bindings.ts` | Which user has which policy |
 | `teams.ts` | Groupings of users for collaboration + bulk app assignment |
-| `custom_app_users.ts` | Which user can see which custom app (kiosk mode) |
-| `custom_app_teams.ts` | Which team can see which custom app |
+| `custom_app_user_bindings.ts` | Which user can see which custom app (kiosk mode) |
+| `custom_app_team_bindings.ts` | Which team can see which custom app |
 | `networks.ts` | Logical groupings of controllers + devices |
 | `devices.ts` | IoT devices and their protocol configs |
 | `controllers.ts` | Bridge boxes (with inline IO/exec policy) |
@@ -261,11 +261,11 @@ export default defineIAMPolicies([
 ]);
 ```
 
-Edit `bindings.ts`:
+Edit `iam_policy_bindings.ts`:
 
 ```ts
-import { defineBindings } from "@wearecococo/dev-cli/define";
-export default defineBindings([
+import { defineIAMPolicyBindings } from "@wearecococo/dev-cli/define";
+export default defineIAMPolicyBindings([
   { user: "alice@acme.com", policy: "press-operator" },
 ]);
 ```
@@ -404,9 +404,9 @@ you can see the shape and uncomment what you need.
 Three files at the repo root:
 
 ```
-users.ts            # who can sign in
-iam_policies.ts     # what they can do
-bindings.ts         # who has which policy
+users.ts                    # who can sign in
+iam_policies.ts             # what they can do
+iam_policy_bindings.ts      # who has which policy
 ```
 
 Each one default-exports the result of a `defineX(…)` helper:
@@ -436,12 +436,33 @@ export default defineIAMPolicies([
 ```
 
 ```ts
-// bindings.ts
-import { defineBindings } from "@wearecococo/dev-cli/define";
-export default defineBindings([
+// iam_policy_bindings.ts
+import { defineIAMPolicyBindings } from "@wearecococo/dev-cli/define";
+export default defineIAMPolicyBindings([
   { user: "alice@acme.com", policy: "press-operator" },
 ]);
 ```
+
+> **Typed refs.** Both `user` and `policy` accept either a string (the
+> natural key) or the actual `User` / `IAMPolicy` object. Export your
+> users by name and import them here for compile-time typo safety:
+>
+> ```ts
+> // users.ts
+> export const alice = { email: "alice@acme.com", name: "Alice", kind: "HUMAN" } as const;
+> export default defineUsers([alice]);
+>
+> // iam_policy_bindings.ts
+> import { alice } from "./users.ts";
+> import { pressOperator } from "./iam_policies.ts";
+> export default defineIAMPolicyBindings([{ user: alice, policy: pressOperator }]);
+> ```
+>
+> The same applies to every cross-resource reference — team members,
+> device networks, controller networks, custom-app-binding users/teams,
+> installation controllers and bot users. Pass strings when the
+> referenced thing only lives on the server, pass typed objects when
+> you've declared it locally.
 
 Apply additively:
 
@@ -459,7 +480,7 @@ a missing entry leaves the server alone. Remove entries explicitly:
 ```sh
 bunx cococo delete user alice@acme.com
 bunx cococo delete policy press-operator
-bunx cococo delete binding alice@acme.com press-operator
+bunx cococo delete iam-policy-binding alice@acme.com press-operator
 ```
 
 Local files are not edited by `delete` — drop the entry yourself to
@@ -478,9 +499,9 @@ apps can be assigned to individual users (kiosk mode) or to teams
 the repo root:
 
 ```
-teams.ts             # who's on which team (with inline members)
-custom_app_users.ts  # which user can see which app
-custom_app_teams.ts  # which team can see which app
+teams.ts                            # who's on which team (with inline members)
+custom_app_user_bindings.ts         # which user can see which app
+custom_app_team_bindings.ts         # which team can see which app
 ```
 
 ```ts
@@ -497,17 +518,17 @@ export default defineTeams([
 ```
 
 ```ts
-// custom_app_users.ts
-import { defineCustomAppUsers } from "@wearecococo/dev-cli/define";
-export default defineCustomAppUsers([
+// custom_app_user_bindings.ts
+import { defineCustomAppUserBindings } from "@wearecococo/dev-cli/define";
+export default defineCustomAppUserBindings([
   { user: "alice@acme.com", app: "job-board" },
 ]);
 ```
 
 ```ts
-// custom_app_teams.ts
-import { defineCustomAppTeams } from "@wearecococo/dev-cli/define";
-export default defineCustomAppTeams([
+// custom_app_team_bindings.ts
+import { defineCustomAppTeamBindings } from "@wearecococo/dev-cli/define";
+export default defineCustomAppTeamBindings([
   { team: "press-operators", app: "press-dashboard" },
 ]);
 ```
@@ -537,17 +558,17 @@ server.
 |---|---|
 | Team row | Additive — undeclared teams left alone |
 | Team `members` | Reconciled within each declared team |
-| `custom_app_users` row | Additive |
-| `custom_app_teams` row | Additive |
+| `CustomAppUserBinding` row | Additive |
+| `CustomAppTeamBinding` row | Additive |
 
 **Removals.** `cococo delete team <name>`,
 `cococo delete team-member <team> <email>`,
-`cococo delete custom-app-user <email> <app>`,
-`cococo delete custom-app-team <team> <app>`. Local files are not
-edited — drop the entry yourself afterwards.
+`cococo delete custom-app-user-binding <email> <app>`,
+`cococo delete custom-app-team-binding <team> <app>`. Local files are
+not edited — drop the entry yourself afterwards.
 
-**Custom-app refs.** `app` references in `custom_app_users.ts` and
-`custom_app_teams.ts` are custom-app handles (matching
+**Custom-app refs.** `app` references in `custom_app_user_bindings.ts`
+and `custom_app_team_bindings.ts` are custom-app handles (matching
 `custom_apps/<handle>/manifest.ts`). The app must already exist on the
 server (`cococo push <handle>` first); apply doesn't create apps.
 
@@ -1159,12 +1180,12 @@ on PATH, you get the skeleton plus a self-contained prompt at
 # Tenant config lives at the repo root as flat per-kind files:
 users.ts                                   # defineUsers([...])
 iam_policies.ts                            # defineIAMPolicies([...])
-bindings.ts                                # defineBindings([...])
+iam_policy_bindings.ts                     # defineIAMPolicyBindings([...])
 networks.ts                                # defineNetworks([...])
 devices.ts                                 # defineDevices([...])
 teams.ts                                   # defineTeams([...])
-custom_app_users.ts                        # defineCustomAppUsers([...])
-custom_app_teams.ts                        # defineCustomAppTeams([...])
+custom_app_user_bindings.ts                # defineCustomAppUserBindings([...])
+custom_app_team_bindings.ts                # defineCustomAppTeamBindings([...])
 controllers.ts                             # defineControllers([...])
 controller_tokens.ts                       # defineControllerTokens([...])
 edge_app_installations.ts                  # defineEdgeAppInstallations([...])
@@ -1183,7 +1204,7 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 |---|---|
 | `cococo bootstrap [folder] [--pull]` | Scaffold a fresh workspace: package.json, .env.example, tsconfig, ops stubs, CLAUDE.md. `--no-claude-md` to skip the project guide. `--pull` also dumps existing tenant state into the ops files |
 | `cococo claude-md [folder]` | Add (or `--force` refresh) the CLAUDE.md project guide in an existing workspace |
-| `cococo dump <kind\|all> [-f]` | Download tenant ops state from the server into local files. Kinds: `users`, `policies`, `bindings`, `networks`, `devices`, `teams`, `custom-app-users`, `custom-app-teams`, `controllers`, `edge-app-installations`, `all`. Tokens excluded; write-only secrets emit `${config:NAME}` placeholders |
+| `cococo dump <kind\|all> [-f]` | Download tenant ops state from the server into local files. Kinds: `users`, `policies`, `iam-policy-bindings`, `networks`, `devices`, `teams`, `custom-app-user-bindings`, `custom-app-team-bindings`, `controllers`, `edge-app-installations`, `all`. Tokens excluded; write-only secrets emit `${config:NAME}` placeholders |
 | `cococo init <id>` | Scaffold an integration under `integrations/<short-name>/` |
 | `cococo init <handle> --type app` | Scaffold a custom app under `custom_apps/<handle>/` |
 | `cococo init <handle> --type edge` | Scaffold an edge app under `edge_apps/<handle>/` |
@@ -1194,7 +1215,7 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 | `cococo publish [folder\|--all]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED). `--all` publishes every artifact, stops on first failure |
 | `cococo deprecate [folder]` | Retire the PUBLISHED definition. Integrations: ACTIVE → DEPRECATED. Edge apps: PUBLISHED → DEPRECATED. Existing installations keep working until upgraded. Custom apps don't apply |
 | `cococo apply` | Apply tenant ops files at the repo root. Mostly additive; reconciled lists for team `members` and controller `policy`; tokens are create-only with existence check; installations smart-upsert (exact match / upgrade / create) |
-| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user <email> <app>`, `custom-app-team <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>` |
+| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `iam-policy-binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user-binding <email> <app>`, `custom-app-team-binding <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>` |
 | `cococo pull <id\|handle> [--type app\|edge] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |

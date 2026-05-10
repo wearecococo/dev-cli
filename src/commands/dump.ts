@@ -29,14 +29,14 @@ import {
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import {
-  BINDINGS_FILENAME,
   CONTROLLERS_FILENAME,
-  CUSTOM_APP_TEAMS_FILENAME,
-  CUSTOM_APP_USERS_FILENAME,
+  CUSTOM_APP_TEAM_BINDINGS_FILENAME,
+  CUSTOM_APP_USER_BINDINGS_FILENAME,
   DEVICES_FILENAME,
   EDGE_APP_INSTALLATIONS_FILENAME,
   NETWORKS_FILENAME,
   POLICIES_FILENAME,
+  POLICY_BINDINGS_FILENAME,
   TEAMS_FILENAME,
   USERS_FILENAME,
 } from "../ops.ts";
@@ -44,12 +44,12 @@ import {
 export type DumpKind =
   | "users"
   | "policies"
-  | "bindings"
+  | "iam-policy-bindings"
   | "networks"
   | "devices"
   | "teams"
-  | "custom-app-users"
-  | "custom-app-teams"
+  | "custom-app-user-bindings"
+  | "custom-app-team-bindings"
   | "controllers"
   | "edge-app-installations"
   | "all";
@@ -64,12 +64,12 @@ export type DumpOptions = {
 const ALL_KINDS: Exclude<DumpKind, "all">[] = [
   "users",
   "policies",
-  "bindings",
+  "iam-policy-bindings",
   "networks",
   "devices",
   "teams",
-  "custom-app-users",
-  "custom-app-teams",
+  "custom-app-user-bindings",
+  "custom-app-team-bindings",
   "controllers",
   "edge-app-installations",
 ];
@@ -100,12 +100,12 @@ async function dumpOne(
 ): Promise<void> {
   if (kind === "users") return dumpUsers(client, cwd, force);
   if (kind === "policies") return dumpPolicies(client, cwd, force);
-  if (kind === "bindings") return dumpBindings(client, cwd, force);
+  if (kind === "iam-policy-bindings") return dumpBindings(client, cwd, force);
   if (kind === "networks") return dumpNetworks(client, cwd, force);
   if (kind === "devices") return dumpDevices(client, cwd, force);
   if (kind === "teams") return dumpTeams(client, cwd, force);
-  if (kind === "custom-app-users") return dumpCustomAppUsers(client, cwd, force);
-  if (kind === "custom-app-teams") return dumpCustomAppTeams(client, cwd, force);
+  if (kind === "custom-app-user-bindings") return dumpCustomAppUsers(client, cwd, force);
+  if (kind === "custom-app-team-bindings") return dumpCustomAppTeams(client, cwd, force);
   if (kind === "controllers") return dumpControllers(client, cwd, force);
   if (kind === "edge-app-installations") return dumpInstallations(client, cwd, force);
 }
@@ -159,7 +159,7 @@ async function dumpBindings(client: GraphQLClient, cwd: string, force: boolean):
     const policies = await listUserPolicies(client, u.id);
     for (const p of policies) items.push({ user: u.email, policy: p.id });
   }
-  writeOps(cwd, BINDINGS_FILENAME, "defineBindings", items, force);
+  writeOps(cwd, POLICY_BINDINGS_FILENAME, "defineIAMPolicyBindings", items, force);
 }
 
 async function dumpNetworks(client: GraphQLClient, cwd: string, force: boolean): Promise<void> {
@@ -296,7 +296,7 @@ async function dumpCustomAppUsers(
   const items = bindings
     .filter((b) => userEmails.has(b.userId) && appHandles.has(b.customAppId))
     .map((b) => ({ user: userEmails.get(b.userId)!, app: appHandles.get(b.customAppId)! }));
-  writeOps(cwd, CUSTOM_APP_USERS_FILENAME, "defineCustomAppUsers", items, force);
+  writeOps(cwd, CUSTOM_APP_USER_BINDINGS_FILENAME, "defineCustomAppUserBindings", items, force);
 }
 
 async function dumpCustomAppTeams(
@@ -319,7 +319,7 @@ async function dumpCustomAppTeams(
   const items = bindings
     .filter((b) => teamNames.has(b.teamId) && appHandles.has(b.customAppId))
     .map((b) => ({ team: teamNames.get(b.teamId)!, app: appHandles.get(b.customAppId)! }));
-  writeOps(cwd, CUSTOM_APP_TEAMS_FILENAME, "defineCustomAppTeams", items, force);
+  writeOps(cwd, CUSTOM_APP_TEAM_BINDINGS_FILENAME, "defineCustomAppTeamBindings", items, force);
 }
 
 async function dumpControllers(

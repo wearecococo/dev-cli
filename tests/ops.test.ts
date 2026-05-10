@@ -42,9 +42,9 @@ export default defineIAMPolicies([
 `,
     );
     writeFileSync(
-      join(root, "bindings.ts"),
-      `import { defineBindings } from "${DEFINE_PATH}";
-export default defineBindings([
+      join(root, "iam_policy_bindings.ts"),
+      `import { defineIAMPolicyBindings } from "${DEFINE_PATH}";
+export default defineIAMPolicyBindings([
   { user: "alice@acme.com", policy: "press-operator" },
 ]);
 `,
@@ -57,12 +57,12 @@ export default defineBindings([
     expect(ops.policies).toHaveLength(1);
     expect(ops.policies[0]?.handle).toBe("press-operator");
     expect(ops.policies[0]?.statements[0]?.actions).toEqual(["job:read", "job:transition"]);
-    expect(ops.bindings).toHaveLength(1);
-    expect(ops.bindings[0]?.user).toBe("alice@acme.com");
+    expect(ops.policyBindings).toHaveLength(1);
+    expect(ops.policyBindings[0]?.user).toBe("alice@acme.com");
     // All three file paths recorded.
     expect(ops.files.users).toBeDefined();
     expect(ops.files.policies).toBeDefined();
-    expect(ops.files.bindings).toBeDefined();
+    expect(ops.files.policyBindings).toBeDefined();
   });
 
   test("skips files that don't exist", async () => {
@@ -75,10 +75,10 @@ export default defineUsers([{ email: "solo@acme.com" }]);
     const ops = await loadOps(root);
     expect(ops.users).toHaveLength(1);
     expect(ops.policies).toHaveLength(0);
-    expect(ops.bindings).toHaveLength(0);
+    expect(ops.policyBindings).toHaveLength(0);
     expect(ops.files.users).toBeDefined();
     expect(ops.files.policies).toBeUndefined();
-    expect(ops.files.bindings).toBeUndefined();
+    expect(ops.files.policyBindings).toBeUndefined();
   });
 
   test("rejects a duplicate user email", async () => {
@@ -109,15 +109,15 @@ export default defineIAMPolicies([
 
   test("rejects a duplicate binding row", async () => {
     writeFileSync(
-      join(root, "bindings.ts"),
-      `import { defineBindings } from "${DEFINE_PATH}";
-export default defineBindings([
+      join(root, "iam_policy_bindings.ts"),
+      `import { defineIAMPolicyBindings } from "${DEFINE_PATH}";
+export default defineIAMPolicyBindings([
   { user: "alice@acme.com", policy: "p" },
   { user: "alice@acme.com", policy: "p" },
 ]);
 `,
     );
-    await expect(loadOps(root)).rejects.toThrow(/Duplicate binding alice@acme.com → p/);
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate IAM policy binding alice@acme.com → p/);
   });
 
   test("rejects when the file's default export isn't a defineX(...) result", async () => {
@@ -245,17 +245,17 @@ export default defineTeams([
 `,
     );
     writeFileSync(
-      join(root, "custom_app_users.ts"),
-      `import { defineCustomAppUsers } from "${DEFINE_PATH}";
-export default defineCustomAppUsers([
+      join(root, "custom_app_user_bindings.ts"),
+      `import { defineCustomAppUserBindings } from "${DEFINE_PATH}";
+export default defineCustomAppUserBindings([
   { user: "alice@acme.com", app: "job-board" },
 ]);
 `,
     );
     writeFileSync(
-      join(root, "custom_app_teams.ts"),
-      `import { defineCustomAppTeams } from "${DEFINE_PATH}";
-export default defineCustomAppTeams([
+      join(root, "custom_app_team_bindings.ts"),
+      `import { defineCustomAppTeamBindings } from "${DEFINE_PATH}";
+export default defineCustomAppTeamBindings([
   { team: "press-operators", app: "press-dashboard" },
 ]);
 `,
@@ -266,13 +266,13 @@ export default defineCustomAppTeams([
     expect(ops.teams[0]?.name).toBe("press-operators");
     expect(ops.teams[0]?.members).toEqual(["alice@acme.com", "bob@acme.com"]);
     expect(ops.teams[1]?.members).toBeUndefined();
-    expect(ops.customAppUsers).toHaveLength(1);
-    expect(ops.customAppUsers[0]).toEqual({ user: "alice@acme.com", app: "job-board" });
-    expect(ops.customAppTeams).toHaveLength(1);
-    expect(ops.customAppTeams[0]).toEqual({ team: "press-operators", app: "press-dashboard" });
+    expect(ops.customAppUserBindings).toHaveLength(1);
+    expect(ops.customAppUserBindings[0]).toEqual({ user: "alice@acme.com", app: "job-board" });
+    expect(ops.customAppTeamBindings).toHaveLength(1);
+    expect(ops.customAppTeamBindings[0]).toEqual({ team: "press-operators", app: "press-dashboard" });
     expect(ops.files.teams).toBeDefined();
-    expect(ops.files.customAppUsers).toBeDefined();
-    expect(ops.files.customAppTeams).toBeDefined();
+    expect(ops.files.customAppUserBindings).toBeDefined();
+    expect(ops.files.customAppTeamBindings).toBeDefined();
   });
 
   test("rejects duplicate team names", async () => {
@@ -304,28 +304,28 @@ export default defineTeams([
 
   test("rejects duplicate custom-app-user bindings", async () => {
     writeFileSync(
-      join(root, "custom_app_users.ts"),
-      `import { defineCustomAppUsers } from "${DEFINE_PATH}";
-export default defineCustomAppUsers([
+      join(root, "custom_app_user_bindings.ts"),
+      `import { defineCustomAppUserBindings } from "${DEFINE_PATH}";
+export default defineCustomAppUserBindings([
   { user: "u@x", app: "a" },
   { user: "u@x", app: "a" },
 ]);
 `,
     );
-    await expect(loadOps(root)).rejects.toThrow(/Duplicate custom-app-user binding u@x → a/);
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate custom-app user binding u@x → a/);
   });
 
   test("rejects duplicate custom-app-team bindings", async () => {
     writeFileSync(
-      join(root, "custom_app_teams.ts"),
-      `import { defineCustomAppTeams } from "${DEFINE_PATH}";
-export default defineCustomAppTeams([
+      join(root, "custom_app_team_bindings.ts"),
+      `import { defineCustomAppTeamBindings } from "${DEFINE_PATH}";
+export default defineCustomAppTeamBindings([
   { team: "t", app: "a" },
   { team: "t", app: "a" },
 ]);
 `,
     );
-    await expect(loadOps(root)).rejects.toThrow(/Duplicate custom-app-team binding t → a/);
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate custom-app team binding t → a/);
   });
 
   test("loads controllers, tokens, and installations", async () => {
@@ -415,6 +415,79 @@ export default defineControllerTokens([
 `,
     );
     await expect(loadOps(root)).rejects.toThrow(/Duplicate controller token c1\/t/);
+  });
+
+  test("accepts typed object refs for cross-resource references", async () => {
+    // The headline win for typed refs: this file would not compile if
+    // someone typo'd a user email — `alice` is the actual TS object,
+    // not a free-form string.
+    writeFileSync(
+      join(root, "users.ts"),
+      `import { defineUsers } from "${DEFINE_PATH}";
+export const alice = { email: "alice@acme.com", name: "Alice", kind: "HUMAN" } as const;
+export const bob = { email: "bob@acme.com", name: "Bob", kind: "HUMAN" } as const;
+export default defineUsers([alice, bob]);
+`,
+    );
+    writeFileSync(
+      join(root, "iam_policies.ts"),
+      `import { defineIAMPolicies } from "${DEFINE_PATH}";
+export const pressOperator = {
+  handle: "press-operator",
+  name: "Press Operator",
+  statements: [{ effect: "ALLOW" as const, actions: ["job:read"], resources: ["*"] }],
+};
+export default defineIAMPolicies([pressOperator]);
+`,
+    );
+    writeFileSync(
+      join(root, "iam_policy_bindings.ts"),
+      `import { defineIAMPolicyBindings } from "${DEFINE_PATH}";
+import { alice, bob } from "./users.ts";
+import { pressOperator } from "./iam_policies.ts";
+export default defineIAMPolicyBindings([
+  { user: alice, policy: pressOperator },
+  // Mixed: typed object on one side, string on the other.
+  { user: bob, policy: "press-operator" },
+]);
+`,
+    );
+
+    const ops = await loadOps(root);
+    expect(ops.policyBindings).toHaveLength(2);
+    // The user side is the typed object (round-tripped through dynamic import).
+    const first = ops.policyBindings[0]!;
+    expect(typeof first.user).toBe("object");
+    expect(typeof first.user === "object" && first.user.email).toBe("alice@acme.com");
+    expect(typeof first.policy === "object" && first.policy.handle).toBe("press-operator");
+    // The mixed-form binding has a string user/policy.
+    const second = ops.policyBindings[1]!;
+    expect(typeof second.user === "object" && second.user.email).toBe("bob@acme.com");
+    expect(second.policy).toBe("press-operator");
+  });
+
+  test("typed object refs work for team members (mixed string + object)", async () => {
+    writeFileSync(
+      join(root, "users.ts"),
+      `import { defineUsers } from "${DEFINE_PATH}";
+export const alice = { email: "alice@acme.com", kind: "HUMAN" } as const;
+export default defineUsers([alice, { email: "bob@acme.com", kind: "HUMAN" }]);
+`,
+    );
+    writeFileSync(
+      join(root, "teams.ts"),
+      `import { defineTeams } from "${DEFINE_PATH}";
+import { alice } from "./users.ts";
+export default defineTeams([
+  { name: "press-operators", members: [alice, "bob@acme.com"] },
+]);
+`,
+    );
+    const ops = await loadOps(root);
+    const team = ops.teams[0]!;
+    expect(team.members).toHaveLength(2);
+    expect(typeof team.members![0] === "object" && (team.members![0] as { email: string }).email).toBe("alice@acme.com");
+    expect(team.members![1]).toBe("bob@acme.com");
   });
 
   test("rejects two installs of the same edge-app handle on the same controller", async () => {

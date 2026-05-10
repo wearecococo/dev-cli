@@ -64,8 +64,8 @@ program
   .command("dump <kind>")
   .description(
     "Download tenant ops state from the server into a local file. Kinds: " +
-      "users, policies, bindings, networks, devices, teams, custom-app-users, " +
-      "custom-app-teams, controllers, edge-app-installations, all. Tokens are " +
+      "users, policies, bindings, networks, devices, teams, custom-app-user-bindings, " +
+      "custom-app-team-bindings, controllers, edge-app-installations, all. Tokens are " +
       "excluded — connect bundles can't be re-fetched. Write-only secrets " +
       "(device passwords, etc.) emit ${config:NAME} placeholders.",
   )
@@ -74,12 +74,12 @@ program
     const allowed: DumpKind[] = [
       "users",
       "policies",
-      "bindings",
+      "iam-policy-bindings",
       "networks",
       "devices",
       "teams",
-      "custom-app-users",
-      "custom-app-teams",
+      "custom-app-user-bindings",
+      "custom-app-team-bindings",
       "controllers",
       "edge-app-installations",
       "all",
@@ -263,8 +263,8 @@ program
 program
   .command("apply")
   .description(
-    "Apply tenant ops files at the repo root: users.ts, iam_policies.ts, bindings.ts, " +
-      "networks.ts, devices.ts, teams.ts, custom_app_users.ts, custom_app_teams.ts, " +
+    "Apply tenant ops files at the repo root: users.ts, iam_policies.ts, iam_policy_bindings.ts, " +
+      "networks.ts, devices.ts, teams.ts, custom_app_user_bindings.ts, custom_app_team_bindings.ts, " +
       "controllers.ts, controller_tokens.ts, edge_app_installations.ts. Mostly additive " +
       "(upserts what's declared, never deletes), with two reconciled exceptions: team " +
       "`members` and controller `policy` allowlists are wholesale-replaced from the " +
@@ -279,10 +279,10 @@ program
   .command("delete <kind> [args...]")
   .description(
     "Delete a tenant ops resource on the server. Kinds: " +
-      "user (<email>), policy (<handle>), binding (<email> <policy>), " +
+      "user (<email>), policy (<handle>), iam-policy-binding (<email> <policy>), " +
       "network (<name>), device (<identifier>), team (<name>), " +
-      "team-member (<team> <email>), custom-app-user (<email> <app>), " +
-      "custom-app-team (<team> <app>), controller (<handle>), " +
+      "team-member (<team> <email>), custom-app-user-binding (<email> <app>), " +
+      "custom-app-team-binding (<team> <app>), controller (<handle>), " +
       "controller-token (<controller> <name>), " +
       "edge-app-installation (<controller> <app> <version>). " +
       "Local ops files are NOT edited — remove the entry yourself to " +
@@ -292,13 +292,13 @@ program
     const allowed = [
       "user",
       "policy",
-      "binding",
+      "iam-policy-binding",
       "network",
       "device",
       "team",
       "team-member",
-      "custom-app-user",
-      "custom-app-team",
+      "custom-app-user-binding",
+      "custom-app-team-binding",
       "controller",
       "controller-token",
       "edge-app-installation",

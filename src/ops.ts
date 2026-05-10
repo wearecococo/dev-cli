@@ -1,15 +1,19 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  controllerHandle,
   manifestKind,
-  type Binding,
+  teamName,
+  userEmail,
+  iamPolicyHandle,
   type Controller,
   type ControllerToken,
-  type CustomAppTeam,
-  type CustomAppUser,
+  type CustomAppTeamBinding,
+  type CustomAppUserBinding,
   type Device,
   type EdgeAppInstallation,
   type IAMPolicy,
+  type IAMPolicyBinding,
   type Network,
   type Team,
   type User,
@@ -17,12 +21,12 @@ import {
 
 export const USERS_FILENAME = "users.ts";
 export const POLICIES_FILENAME = "iam_policies.ts";
-export const BINDINGS_FILENAME = "bindings.ts";
+export const POLICY_BINDINGS_FILENAME = "iam_policy_bindings.ts";
 export const NETWORKS_FILENAME = "networks.ts";
 export const DEVICES_FILENAME = "devices.ts";
 export const TEAMS_FILENAME = "teams.ts";
-export const CUSTOM_APP_USERS_FILENAME = "custom_app_users.ts";
-export const CUSTOM_APP_TEAMS_FILENAME = "custom_app_teams.ts";
+export const CUSTOM_APP_USER_BINDINGS_FILENAME = "custom_app_user_bindings.ts";
+export const CUSTOM_APP_TEAM_BINDINGS_FILENAME = "custom_app_team_bindings.ts";
 export const CONTROLLERS_FILENAME = "controllers.ts";
 export const CONTROLLER_TOKENS_FILENAME = "controller_tokens.ts";
 export const EDGE_APP_INSTALLATIONS_FILENAME = "edge_app_installations.ts";
@@ -32,24 +36,24 @@ export type LoadedOps = {
   files: {
     users?: string;
     policies?: string;
-    bindings?: string;
+    policyBindings?: string;
     networks?: string;
     devices?: string;
     teams?: string;
-    customAppUsers?: string;
-    customAppTeams?: string;
+    customAppUserBindings?: string;
+    customAppTeamBindings?: string;
     controllers?: string;
     controllerTokens?: string;
     edgeAppInstallations?: string;
   };
   users: User[];
   policies: IAMPolicy[];
-  bindings: Binding[];
+  policyBindings: IAMPolicyBinding[];
   networks: Network[];
   devices: Device[];
   teams: Team[];
-  customAppUsers: CustomAppUser[];
-  customAppTeams: CustomAppTeam[];
+  customAppUserBindings: CustomAppUserBinding[];
+  customAppTeamBindings: CustomAppTeamBinding[];
   controllers: Controller[];
   controllerTokens: ControllerToken[];
   edgeAppInstallations: EdgeAppInstallation[];
@@ -70,12 +74,12 @@ export type LoadedOps = {
 export async function loadOps(repoRoot: string): Promise<LoadedOps> {
   const usersPath = resolve(repoRoot, USERS_FILENAME);
   const policiesPath = resolve(repoRoot, POLICIES_FILENAME);
-  const bindingsPath = resolve(repoRoot, BINDINGS_FILENAME);
+  const policyBindingsPath = resolve(repoRoot, POLICY_BINDINGS_FILENAME);
   const networksPath = resolve(repoRoot, NETWORKS_FILENAME);
   const devicesPath = resolve(repoRoot, DEVICES_FILENAME);
   const teamsPath = resolve(repoRoot, TEAMS_FILENAME);
-  const customAppUsersPath = resolve(repoRoot, CUSTOM_APP_USERS_FILENAME);
-  const customAppTeamsPath = resolve(repoRoot, CUSTOM_APP_TEAMS_FILENAME);
+  const customAppUserBindingsPath = resolve(repoRoot, CUSTOM_APP_USER_BINDINGS_FILENAME);
+  const customAppTeamBindingsPath = resolve(repoRoot, CUSTOM_APP_TEAM_BINDINGS_FILENAME);
   const controllersPath = resolve(repoRoot, CONTROLLERS_FILENAME);
   const controllerTokensPath = resolve(repoRoot, CONTROLLER_TOKENS_FILENAME);
   const edgeAppInstallationsPath = resolve(repoRoot, EDGE_APP_INSTALLATIONS_FILENAME);
@@ -84,12 +88,12 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     files: {},
     users: [],
     policies: [],
-    bindings: [],
+    policyBindings: [],
     networks: [],
     devices: [],
     teams: [],
-    customAppUsers: [],
-    customAppTeams: [],
+    customAppUserBindings: [],
+    customAppTeamBindings: [],
     controllers: [],
     controllerTokens: [],
     edgeAppInstallations: [],
@@ -103,9 +107,9 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     out.policies = await loadList(policiesPath, "iam_policies", "policies");
     out.files.policies = policiesPath;
   }
-  if (existsSync(bindingsPath)) {
-    out.bindings = await loadList(bindingsPath, "bindings", "bindings");
-    out.files.bindings = bindingsPath;
+  if (existsSync(policyBindingsPath)) {
+    out.policyBindings = await loadList(policyBindingsPath, "iam_policy_bindings", "bindings");
+    out.files.policyBindings = policyBindingsPath;
   }
   if (existsSync(networksPath)) {
     out.networks = await loadList(networksPath, "networks", "networks");
@@ -119,21 +123,21 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     out.teams = await loadList(teamsPath, "teams", "teams");
     out.files.teams = teamsPath;
   }
-  if (existsSync(customAppUsersPath)) {
-    out.customAppUsers = await loadList(
-      customAppUsersPath,
-      "custom_app_users",
+  if (existsSync(customAppUserBindingsPath)) {
+    out.customAppUserBindings = await loadList(
+      customAppUserBindingsPath,
+      "custom_app_user_bindings",
       "bindings",
     );
-    out.files.customAppUsers = customAppUsersPath;
+    out.files.customAppUserBindings = customAppUserBindingsPath;
   }
-  if (existsSync(customAppTeamsPath)) {
-    out.customAppTeams = await loadList(
-      customAppTeamsPath,
-      "custom_app_teams",
+  if (existsSync(customAppTeamBindingsPath)) {
+    out.customAppTeamBindings = await loadList(
+      customAppTeamBindingsPath,
+      "custom_app_team_bindings",
       "bindings",
     );
-    out.files.customAppTeams = customAppTeamsPath;
+    out.files.customAppTeamBindings = customAppTeamBindingsPath;
   }
   if (existsSync(controllersPath)) {
     out.controllers = await loadList(controllersPath, "controllers", "controllers");
@@ -163,12 +167,12 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
 type OpsKind =
   | "users"
   | "iam_policies"
-  | "bindings"
+  | "iam_policy_bindings"
   | "networks"
   | "devices"
   | "teams"
-  | "custom_app_users"
-  | "custom_app_teams"
+  | "custom_app_user_bindings"
+  | "custom_app_team_bindings"
   | "controllers"
   | "controller_tokens"
   | "edge_app_installations";
@@ -213,12 +217,12 @@ async function loadList<T>(
 function expectedKindHelper(kind: OpsKind): string {
   if (kind === "users") return "Users";
   if (kind === "iam_policies") return "IAMPolicies";
-  if (kind === "bindings") return "Bindings";
+  if (kind === "iam_policy_bindings") return "IAMPolicyBindings";
   if (kind === "networks") return "Networks";
   if (kind === "devices") return "Devices";
   if (kind === "teams") return "Teams";
-  if (kind === "custom_app_users") return "CustomAppUsers";
-  if (kind === "custom_app_teams") return "CustomAppTeams";
+  if (kind === "custom_app_user_bindings") return "CustomAppUserBindings";
+  if (kind === "custom_app_team_bindings") return "CustomAppTeamBindings";
   if (kind === "controllers") return "Controllers";
   if (kind === "controller_tokens") return "ControllerTokens";
   return "EdgeAppInstallations";
@@ -244,11 +248,13 @@ function validateNoDuplicates(ops: LoadedOps): void {
     seenHandles.add(p.handle);
   }
   const seenBindings = new Set<string>();
-  for (const b of ops.bindings) {
-    const key = `${b.user}|${b.policy}`;
+  for (const b of ops.policyBindings) {
+    const u = userEmail(b.user);
+    const p = iamPolicyHandle(b.policy);
+    const key = `${u}|${p}`;
     if (seenBindings.has(key)) {
       throw new Error(
-        `Duplicate binding ${b.user} → ${b.policy} in bindings.ts.`,
+        `Duplicate IAM policy binding ${u} → ${p} in iam_policy_bindings.ts.`,
       );
     }
     seenBindings.add(key);
@@ -285,31 +291,34 @@ function validateNoDuplicates(ops: LoadedOps): void {
     if (t.members) {
       const seenMembers = new Set<string>();
       for (const m of t.members) {
-        if (seenMembers.has(m)) {
+        const email = userEmail(m);
+        if (seenMembers.has(email)) {
           throw new Error(
-            `Duplicate member '${m}' in team '${t.name}' in teams.ts.`,
+            `Duplicate member '${email}' in team '${t.name}' in teams.ts.`,
           );
         }
-        seenMembers.add(m);
+        seenMembers.add(email);
       }
     }
   }
   const seenAppUsers = new Set<string>();
-  for (const b of ops.customAppUsers) {
-    const key = `${b.user}|${b.app}`;
+  for (const b of ops.customAppUserBindings) {
+    const u = userEmail(b.user);
+    const key = `${u}|${b.app}`;
     if (seenAppUsers.has(key)) {
       throw new Error(
-        `Duplicate custom-app-user binding ${b.user} → ${b.app} in custom_app_users.ts.`,
+        `Duplicate custom-app user binding ${u} → ${b.app} in custom_app_user_bindings.ts.`,
       );
     }
     seenAppUsers.add(key);
   }
   const seenAppTeams = new Set<string>();
-  for (const b of ops.customAppTeams) {
-    const key = `${b.team}|${b.app}`;
+  for (const b of ops.customAppTeamBindings) {
+    const t = teamName(b.team);
+    const key = `${t}|${b.app}`;
     if (seenAppTeams.has(key)) {
       throw new Error(
-        `Duplicate custom-app-team binding ${b.team} → ${b.app} in custom_app_teams.ts.`,
+        `Duplicate custom-app team binding ${t} → ${b.app} in custom_app_team_bindings.ts.`,
       );
     }
     seenAppTeams.add(key);
@@ -325,10 +334,11 @@ function validateNoDuplicates(ops: LoadedOps): void {
   }
   const seenTokens = new Set<string>();
   for (const t of ops.controllerTokens) {
-    const key = `${t.controller}|${t.name}`;
+    const ctrl = controllerHandle(t.controller);
+    const key = `${ctrl}|${t.name}`;
     if (seenTokens.has(key)) {
       throw new Error(
-        `Duplicate controller token ${t.controller}/${t.name} in controller_tokens.ts. ` +
+        `Duplicate controller token ${ctrl}/${t.name} in controller_tokens.ts. ` +
           `(controller, name) is the natural key.`,
       );
     }
@@ -336,10 +346,11 @@ function validateNoDuplicates(ops: LoadedOps): void {
   }
   const seenInstalls = new Set<string>();
   for (const i of ops.edgeAppInstallations) {
-    const key = `${i.controller}|${i.app}`;
+    const ctrl = controllerHandle(i.controller);
+    const key = `${ctrl}|${i.app}`;
     if (seenInstalls.has(key)) {
       throw new Error(
-        `Duplicate edge-app installation ${i.app} on ${i.controller} in edge_app_installations.ts. ` +
+        `Duplicate edge-app installation ${i.app} on ${ctrl} in edge_app_installations.ts. ` +
           `Only one version of an edge-app handle can be installed per controller.`,
       );
     }

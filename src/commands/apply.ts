@@ -42,20 +42,25 @@ import {
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { loadOps, type LoadedOps } from "../ops.ts";
-import type {
-  Binding,
-  Controller,
-  ControllerToken,
-  CustomAppTeam,
-  CustomAppUser,
-  Device,
-  EdgeAppInstallation,
-  IAMPolicy,
-  InboundProtocol,
-  Network,
-  OutboundProtocol,
-  Team,
-  User,
+import {
+  controllerHandle,
+  iamPolicyHandle,
+  networkName,
+  teamName,
+  userEmail,
+  type Controller,
+  type ControllerToken,
+  type CustomAppTeamBinding,
+  type CustomAppUserBinding,
+  type Device,
+  type EdgeAppInstallation,
+  type IAMPolicy,
+  type IAMPolicyBinding,
+  type InboundProtocol,
+  type Network,
+  type OutboundProtocol,
+  type Team,
+  type User,
 } from "../define.ts";
 
 /**
@@ -74,8 +79,8 @@ export async function runApply(overrides: ConfigOverrides): Promise<void> {
   if (Object.values(ops.files).every((v) => v === undefined)) {
     console.log(
       `No ops files found in ${process.cwd()}. Expected one of: ` +
-        `users.ts, iam_policies.ts, bindings.ts, networks.ts, devices.ts, ` +
-        `teams.ts, custom_app_users.ts, custom_app_teams.ts, ` +
+        `users.ts, iam_policies.ts, iam_policy_bindings.ts, networks.ts, devices.ts, ` +
+        `teams.ts, custom_app_user_bindings.ts, custom_app_team_bindings.ts, ` +
         `controllers.ts, controller_tokens.ts, edge_app_installations.ts.`,
     );
     return;
@@ -84,12 +89,12 @@ export async function runApply(overrides: ConfigOverrides): Promise<void> {
   const client = createClient(loadConfig(overrides));
   const policiesById = await applyPolicies(client, ops.policies);
   const usersByEmail = await applyUsers(client, ops.users);
-  await applyBindings(client, ops.bindings, usersByEmail, policiesById, ops);
+  await applyPolicyBindings(client, ops.policyBindings, usersByEmail, policiesById, ops);
   const networksByName = await applyNetworks(client, ops.networks);
   await applyDevices(client, ops.devices, networksByName, ops);
   const teamsByName = await applyTeams(client, ops.teams, usersByEmail, ops);
-  await applyCustomAppUsers(client, ops.customAppUsers, usersByEmail, ops);
-  await applyCustomAppTeams(client, ops.customAppTeams, teamsByName, ops);
+  await applyCustomAppUserBindings(client, ops.customAppUserBindings, usersByEmail, ops);
+  await applyCustomAppTeamBindings(client, ops.customAppTeamBindings, teamsByName, ops);
   const controllersByHandle = await applyControllers(client, ops.controllers, networksByName);
   await applyControllerTokens(client, ops.controllerTokens, controllersByHandle, ops);
   await applyEdgeAppInstallations(
@@ -169,27 +174,32 @@ async function applyUsers(
  * user itself.
  *
  * Additive: if a user already has a policy attached on the server but
- * it isn't in `bindings.ts`, we leave it. Use `cococo delete binding`
- * to detach.
+ * it isn't in `iam_policy_bindings.ts`, we leave it. Use
+ * `cococo delete iam-policy-binding` to detach.
  */
-async function applyBindings(
+async function applyPolicyBindings(
   client: GraphQLClient,
-  bindings: Binding[],
+  bindings: IAMPolicyBinding[],
   usersByEmail: Map<string, UserState>,
   policiesByHandle: Map<string, IAMPolicyState>,
   ops: LoadedOps,
 ): Promise<void> {
   if (bindings.length === 0) return;
 
+  // Each binding ref is either a string natural key or a typed object;
+  // extract the natural key so we can resolve uniformly.
+  const userKeys = bindings.map((b) => userEmail(b.user));
+  const policyKeys = bindings.map((b) => iamPolicyHandle(b.policy));
+
   const userId = await resolverFor(
-    bindings.map((b) => b.user),
+    userKeys,
     usersByEmail,
     async (email) => (await getUserByEmail(client, email))?.id,
     "user",
     ops.files.users,
   );
   const policyId = await resolverFor(
-    bindings.map((b) => b.policy),
+    policyKeys,
     new Map([...policiesByHandle].map(([h, p]) => [h, p.id])),
     async (handle) => (await getIAMPolicy(client, handle))?.id,
     "policy",
@@ -197,24 +207,26 @@ async function applyBindings(
   );
 
   // Cache the current attachments per user so we don't issue redundant
-  // attachPolicy calls when reapplying the same bindings.ts.
+  // attachPolicy calls when reapplying the same file.
   const existingByUser = new Map<string, Set<string>>();
   for (const b of bindings) {
-    const uid = userId.get(b.user)!;
-    const pid = policyId.get(b.policy)!;
+    const u = userEmail(b.user);
+    const p = iamPolicyHandle(b.policy);
+    const uid = userId.get(u)!;
+    const pid = policyId.get(p)!;
     let current = existingByUser.get(uid);
     if (!current) {
       const policies = await listUserPolicies(client, uid);
-      current = new Set(policies.map((p) => p.id));
+      current = new Set(policies.map((pp) => pp.id));
       existingByUser.set(uid, current);
     }
     if (current.has(pid)) {
-      console.log(`  binding = ${b.user} → ${b.policy}`);
+      console.log(`  binding = ${u} → ${p}`);
       continue;
     }
     await attachPolicy(client, { userId: uid, policyId: pid });
     current.add(pid);
-    console.log(`  binding + ${b.user} → ${b.policy}`);
+    console.log(`  binding + ${u} → ${p}`);
   }
 }
 
@@ -284,15 +296,17 @@ async function applyDevices(
 ): Promise<void> {
   for (const d of devices) {
     let networkId: string | undefined;
+    let netLabel: string | undefined;
     if (d.network !== undefined) {
-      const local = networksByName.get(d.network);
+      netLabel = networkName(d.network);
+      const local = networksByName.get(netLabel);
       if (local) {
         networkId = local.id;
       } else {
-        const remote = await getNetworkByName(client, d.network);
+        const remote = await getNetworkByName(client, netLabel);
         if (!remote) {
           throw new Error(
-            `Device '${d.identifier}' references network '${d.network}' that doesn't exist ` +
+            `Device '${d.identifier}' references network '${netLabel}' that doesn't exist ` +
               `locally${ops.files.networks ? ` in ${ops.files.networks}` : ""} or on the server.`,
           );
         }
@@ -315,7 +329,7 @@ async function applyDevices(
       outboundProtocols: d.outboundProtocols?.map(toOutboundWire),
       inboundProtocols: d.inboundProtocols?.map(toInboundWire),
     });
-    const netNote = d.network ? ` → ${d.network}` : "";
+    const netNote = netLabel ? ` → ${netLabel}` : "";
     console.log(`  device ${existing ? "~" : "+"} ${d.identifier}${netNote}`);
   }
 }
@@ -411,12 +425,14 @@ async function applyTeams(
 async function reconcileTeamMembers(
   client: GraphQLClient,
   team: TeamState,
-  declared: string[],
+  declared: Team["members"],
   usersByEmail: Map<string, UserState>,
   ops: LoadedOps,
 ): Promise<void> {
   const declaredIds = new Map<string, string>();
-  for (const email of new Set(declared)) {
+  for (const ref of declared ?? []) {
+    const email = userEmail(ref);
+    if (declaredIds.has(email)) continue;
     const local = usersByEmail.get(email);
     if (local) {
       declaredIds.set(email, local.id);
@@ -453,30 +469,32 @@ async function reconcileTeamMembers(
  * attached if missing, others are left alone. Use
  * `cococo delete custom-app-user <email> <app-handle>` to detach.
  */
-async function applyCustomAppUsers(
+async function applyCustomAppUserBindings(
   client: GraphQLClient,
-  rows: CustomAppUser[],
+  rows: CustomAppUserBinding[],
   usersByEmail: Map<string, UserState>,
   ops: LoadedOps,
 ): Promise<void> {
   if (rows.length === 0) return;
+  const userKeys = rows.map((r) => userEmail(r.user));
   const userId = await resolveByKey(
-    rows.map((r) => r.user),
+    userKeys,
     new Map([...usersByEmail].map(([email, u]) => [email, u.id])),
     async (email) => (await getUserByEmail(client, email))?.id,
     "user",
-    ops.files.customAppUsers,
+    ops.files.customAppUserBindings,
   );
   const appId = await resolveAppHandles(
     client,
     rows.map((r) => r.app),
-    ops.files.customAppUsers,
+    ops.files.customAppUserBindings,
   );
 
   // Bulk-fetch existing bindings per app so we don't issue redundant
   // attachCustomAppUser calls when reapplying the same file.
   const existingByApp = new Map<string, Set<string>>();
   for (const r of rows) {
+    const u = userEmail(r.user);
     const aid = appId.get(r.app)!;
     let cached = existingByApp.get(aid);
     if (!cached) {
@@ -484,14 +502,14 @@ async function applyCustomAppUsers(
       cached = new Set(bindings.map((b) => b.userId));
       existingByApp.set(aid, cached);
     }
-    const uid = userId.get(r.user)!;
+    const uid = userId.get(u)!;
     if (cached.has(uid)) {
-      console.log(`  app-user = ${r.user} → ${r.app}`);
+      console.log(`  app-user = ${u} → ${r.app}`);
       continue;
     }
     await attachCustomAppUser(client, { customAppId: aid, userId: uid });
     cached.add(uid);
-    console.log(`  app-user + ${r.user} → ${r.app}`);
+    console.log(`  app-user + ${u} → ${r.app}`);
   }
 }
 
@@ -499,28 +517,30 @@ async function applyCustomAppUsers(
  * Apply team → custom-app bindings. Additive in the same shape as
  * `applyCustomAppUsers`; team handles resolve via `getTeamByName`.
  */
-async function applyCustomAppTeams(
+async function applyCustomAppTeamBindings(
   client: GraphQLClient,
-  rows: CustomAppTeam[],
+  rows: CustomAppTeamBinding[],
   teamsByName: Map<string, TeamState>,
   ops: LoadedOps,
 ): Promise<void> {
   if (rows.length === 0) return;
+  const teamKeys = rows.map((r) => teamName(r.team));
   const teamId = await resolveByKey(
-    rows.map((r) => r.team),
+    teamKeys,
     new Map([...teamsByName].map(([n, t]) => [n, t.id])),
     async (name) => (await getTeamByName(client, name))?.id,
     "team",
-    ops.files.customAppTeams,
+    ops.files.customAppTeamBindings,
   );
   const appId = await resolveAppHandles(
     client,
     rows.map((r) => r.app),
-    ops.files.customAppTeams,
+    ops.files.customAppTeamBindings,
   );
 
   const existingByApp = new Map<string, Set<string>>();
   for (const r of rows) {
+    const t = teamName(r.team);
     const aid = appId.get(r.app)!;
     let cached = existingByApp.get(aid);
     if (!cached) {
@@ -528,14 +548,14 @@ async function applyCustomAppTeams(
       cached = new Set(bindings.map((b) => b.teamId));
       existingByApp.set(aid, cached);
     }
-    const tid = teamId.get(r.team)!;
+    const tid = teamId.get(t)!;
     if (cached.has(tid)) {
-      console.log(`  app-team = ${r.team} → ${r.app}`);
+      console.log(`  app-team = ${t} → ${r.app}`);
       continue;
     }
     await attachCustomAppTeam(client, { customAppId: aid, teamId: tid });
     cached.add(tid);
-    console.log(`  app-team + ${r.team} → ${r.app}`);
+    console.log(`  app-team + ${t} → ${r.app}`);
   }
 }
 
@@ -609,14 +629,15 @@ async function applyControllers(
   for (const c of controllers) {
     let networkId: string | undefined;
     if (c.network !== undefined) {
-      const local = networksByName.get(c.network);
+      const netLabel = networkName(c.network);
+      const local = networksByName.get(netLabel);
       if (local) {
         networkId = local.id;
       } else {
-        const remote = await getNetworkByName(client, c.network);
+        const remote = await getNetworkByName(client, netLabel);
         if (!remote) {
           throw new Error(
-            `Controller '${c.handle}' references network '${c.network}' that ` +
+            `Controller '${c.handle}' references network '${netLabel}' that ` +
               `doesn't exist locally or on the server.`,
           );
         }
@@ -683,7 +704,8 @@ async function applyControllerTokens(
   ops: LoadedOps,
 ): Promise<void> {
   for (const t of tokens) {
-    const controllerId = await resolveControllerId(client, t.controller, controllersByHandle, ops);
+    const ctrlHandle = controllerHandle(t.controller);
+    const controllerId = await resolveControllerId(client, ctrlHandle, controllersByHandle, ops);
 
     const matches = await listControllerTokens(client, {
       controllerId,
@@ -691,7 +713,7 @@ async function applyControllerTokens(
       isRevoked: false,
     });
     if (matches.length > 0) {
-      console.log(`  token = ${t.controller}/${t.name}`);
+      console.log(`  token = ${ctrlHandle}/${t.name}`);
       continue;
     }
 
@@ -701,7 +723,7 @@ async function applyControllerTokens(
       description: t.description,
       expiresAt: t.expiresAt,
     });
-    console.log(`  token + ${t.controller}/${t.name}`);
+    console.log(`  token + ${ctrlHandle}/${t.name}`);
     console.log(`    Connect bundle (save this — never shown again):`);
     console.log(`    ${created.connectBundle}`);
   }
@@ -728,7 +750,8 @@ async function applyEdgeAppInstallations(
   ops: LoadedOps,
 ): Promise<void> {
   for (const i of installs) {
-    const controllerId = await resolveControllerId(client, i.controller, controllersByHandle, ops);
+    const ctrlHandle = controllerHandle(i.controller);
+    const controllerId = await resolveControllerId(client, ctrlHandle, controllersByHandle, ops);
     const edgeApp = await resolveEdgeAppByHandleAndVersion(client, i.app, i.version);
     if (!edgeApp) {
       throw new Error(
@@ -745,11 +768,12 @@ async function applyEdgeAppInstallations(
 
     let botUserId: string | null | undefined;
     if (i.botUser !== undefined) {
-      const local = usersByEmail.get(i.botUser);
-      const user = local ?? (await getUserByEmail(client, i.botUser));
+      const botEmail = userEmail(i.botUser);
+      const local = usersByEmail.get(botEmail);
+      const user = local ?? (await getUserByEmail(client, botEmail));
       if (!user) {
         throw new Error(
-          `Installation ${i.controller}/${i.app} references botUser '${i.botUser}' ` +
+          `Installation ${ctrlHandle}/${i.app} references botUser '${botEmail}' ` +
             `that doesn't exist locally or on the server.`,
         );
       }
@@ -770,7 +794,7 @@ async function applyEdgeAppInstallations(
         isActive: i.isActive,
         variables: i.variables,
       });
-      console.log(`  install ~ ${i.controller}/${i.app}@v${i.version}`);
+      console.log(`  install ~ ${ctrlHandle}/${i.app}@v${i.version}`);
       continue;
     }
 
@@ -794,7 +818,7 @@ async function applyEdgeAppInstallations(
         variables: i.variables,
       });
       console.log(
-        `  install ↑ ${i.controller}/${i.app} v${sameHandle.edgeApp?.version} → v${i.version}`,
+        `  install ↑ ${ctrlHandle}/${i.app} v${sameHandle.edgeApp?.version} → v${i.version}`,
       );
       continue;
     }
@@ -806,7 +830,7 @@ async function applyEdgeAppInstallations(
       isActive: i.isActive,
       variables: i.variables,
     });
-    console.log(`  install + ${i.controller}/${i.app}@v${i.version}`);
+    console.log(`  install + ${ctrlHandle}/${i.app}@v${i.version}`);
   }
 }
 
@@ -832,12 +856,12 @@ function reportSummary(ops: LoadedOps): void {
   const parts: string[] = [];
   if (ops.users.length > 0) parts.push(`${ops.users.length} user(s)`);
   if (ops.policies.length > 0) parts.push(`${ops.policies.length} polic${ops.policies.length === 1 ? "y" : "ies"}`);
-  if (ops.bindings.length > 0) parts.push(`${ops.bindings.length} binding(s)`);
+  if (ops.policyBindings.length > 0) parts.push(`${ops.policyBindings.length} binding(s)`);
   if (ops.networks.length > 0) parts.push(`${ops.networks.length} network(s)`);
   if (ops.devices.length > 0) parts.push(`${ops.devices.length} device(s)`);
   if (ops.teams.length > 0) parts.push(`${ops.teams.length} team(s)`);
-  if (ops.customAppUsers.length > 0) parts.push(`${ops.customAppUsers.length} app-user(s)`);
-  if (ops.customAppTeams.length > 0) parts.push(`${ops.customAppTeams.length} app-team(s)`);
+  if (ops.customAppUserBindings.length > 0) parts.push(`${ops.customAppUserBindings.length} app-user(s)`);
+  if (ops.customAppTeamBindings.length > 0) parts.push(`${ops.customAppTeamBindings.length} app-team(s)`);
   if (ops.controllers.length > 0) parts.push(`${ops.controllers.length} controller(s)`);
   if (ops.controllerTokens.length > 0) parts.push(`${ops.controllerTokens.length} token(s)`);
   if (ops.edgeAppInstallations.length > 0) {

@@ -28,20 +28,20 @@ import { loadConfig, type ConfigOverrides } from "../config.ts";
 export type DeleteKind =
   | "user"
   | "policy"
-  | "binding"
+  | "iam-policy-binding"
   | "network"
   | "device"
   | "team"
   | "team-member"
-  | "custom-app-user"
-  | "custom-app-team"
+  | "custom-app-user-binding"
+  | "custom-app-team-binding"
   | "controller"
   | "controller-token"
   | "edge-app-installation";
 
 /**
  * Remove a tenant-IAM resource from the platform. The flat ops files
- * (users.ts / iam_policies.ts / bindings.ts) push additively, so this
+ * (users.ts / iam_policies.ts / iam_policy_bindings.ts) push additively, so this
  * is the only way to actually take something off the server. The local
  * file is NOT modified — the user has to remove the corresponding
  * entry by hand to keep the next apply consistent.
@@ -62,9 +62,9 @@ export async function runDelete(
     await deletePolicyByHandle(client, args[0]!);
     return;
   }
-  if (kind === "binding") {
+  if (kind === "iam-policy-binding") {
     if (args.length !== 2) {
-      throw new Error(`cococo delete binding <email> <policy-handle> — got ${args.length} arg(s).`);
+      throw new Error(`cococo delete iam-policy-binding <email> <policy-handle> — got ${args.length} arg(s).`);
     }
     await deleteBinding(client, args[0]!, args[1]!);
     return;
@@ -93,16 +93,16 @@ export async function runDelete(
     await deleteTeamMember(client, args[0]!, args[1]!);
     return;
   }
-  if (kind === "custom-app-user") {
+  if (kind === "custom-app-user-binding") {
     if (args.length !== 2) {
-      throw new Error(`cococo delete custom-app-user <email> <app-handle> — got ${args.length} arg(s).`);
+      throw new Error(`cococo delete custom-app-user-binding <email> <app-handle> — got ${args.length} arg(s).`);
     }
     await deleteAppUser(client, args[0]!, args[1]!);
     return;
   }
-  if (kind === "custom-app-team") {
+  if (kind === "custom-app-team-binding") {
     if (args.length !== 2) {
-      throw new Error(`cococo delete custom-app-team <team-name> <app-handle> — got ${args.length} arg(s).`);
+      throw new Error(`cococo delete custom-app-team-binding <team-name> <app-handle> — got ${args.length} arg(s).`);
     }
     await deleteAppTeam(client, args[0]!, args[1]!);
     return;
@@ -133,9 +133,9 @@ export async function runDelete(
     return;
   }
   throw new Error(
-    `cococo delete: unknown kind '${kind}'. Use user | policy | binding | network | device | ` +
-      `team | team-member | custom-app-user | custom-app-team | controller | controller-token | ` +
-      `edge-app-installation.`,
+    `cococo delete: unknown kind '${kind}'. Use user | policy | iam-policy-binding | ` +
+      `network | device | team | team-member | custom-app-user-binding | ` +
+      `custom-app-team-binding | controller | controller-token | edge-app-installation.`,
   );
 }
 
@@ -198,7 +198,7 @@ async function deleteBinding(
   }
   await detachPolicy(client, { userId: user.id, policyId: policy.id });
   console.log(`Detached policy ${policyHandle} from ${email}.`);
-  console.log(`  Remember to remove the entry from bindings.ts to keep apply consistent.`);
+  console.log(`  Remember to remove the entry from iam_policy_bindings.ts to keep apply consistent.`);
 }
 
 async function deleteTeamByName(client: GraphQLClient, name: string): Promise<void> {
@@ -237,7 +237,7 @@ async function deleteAppUser(
   if (!app) throw new Error(`No custom app found with handle '${appHandle}'.`);
   await detachCustomAppUser(client, { customAppId: app.id, userId: user.id });
   console.log(`Detached user ${email} from custom app '${appHandle}'.`);
-  console.log(`  Remember to remove the entry from custom_app_users.ts to keep apply consistent.`);
+  console.log(`  Remember to remove the entry from custom_app_user_bindings.ts to keep apply consistent.`);
 }
 
 async function deleteAppTeam(
@@ -251,7 +251,7 @@ async function deleteAppTeam(
   if (!app) throw new Error(`No custom app found with handle '${appHandle}'.`);
   await detachCustomAppTeam(client, { customAppId: app.id, teamId: team.id });
   console.log(`Detached team '${teamName}' from custom app '${appHandle}'.`);
-  console.log(`  Remember to remove the entry from custom_app_teams.ts to keep apply consistent.`);
+  console.log(`  Remember to remove the entry from custom_app_team_bindings.ts to keep apply consistent.`);
 }
 
 async function deleteControllerByHandle(client: GraphQLClient, handle: string): Promise<void> {
