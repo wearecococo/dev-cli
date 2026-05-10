@@ -20,8 +20,14 @@ import {
   type ManifestKind,
 } from "./define.ts";
 import type {
+  EdgeAppExecCommand,
   EdgeAppHandler,
+  EdgeAppHTTPRoute,
   EdgeAppLibrary,
+  EdgeAppMQTTBroker,
+  EdgeAppModbusPort,
+  EdgeAppOPCUAEndpoint,
+  EdgeAppSNMPDevice,
   EdgeAppTrigger,
 } from "./graphql/operations.ts";
 
@@ -134,7 +140,8 @@ export type LoadedEdgeApp = {
  * `handlers` / `libraries` are arrays here (matching the GraphQL input
  * shape) even though the author writes them as a record — the loader
  * does the `Object.entries` conversion so push can hand the wire shape
- * straight to the mutation.
+ * straight to the mutation. I/O config (MQTT/OPCUA/SNMP/Modbus/Exec/HTTP)
+ * passes through verbatim — these are pure declarative records.
  */
 export type EdgeAppWire = {
   handle: string;
@@ -143,6 +150,12 @@ export type EdgeAppWire = {
   triggers: EdgeAppTrigger[];
   handlers: EdgeAppHandler[];
   libraries?: EdgeAppLibrary[];
+  mqtt_brokers?: EdgeAppMQTTBroker[];
+  opcua_endpoints?: EdgeAppOPCUAEndpoint[];
+  snmp_devices?: EdgeAppSNMPDevice[];
+  modbus_ports?: EdgeAppModbusPort[];
+  exec_commands?: EdgeAppExecCommand[];
+  http_routes?: EdgeAppHTTPRoute[];
   on_message?: string;
   /** JSON-stringified — `configSchema` is `JSON` on the input. */
   config_schema?: unknown;
@@ -374,19 +387,23 @@ function loadTsEdgeApp(spec: EdgeAppV2, absPath: string): LoadedManifest {
     }
   }
 
-  // Cross-check: every trigger.handler must reference a known handler.
-  // The TS type system already enforces this when callers use literal
-  // object keys, but a loose `as any` cast or YAML-shaped runtime input
-  // would slip through.
+  // Cross-check: every handler reference (triggers, MQTT subscriptions,
+  // OPC UA subscriptions, SNMP poll groups, Modbus poll groups, HTTP
+  // routes) must point at a known handler. The TS type system already
+  // enforces this when callers use literal object keys, but a loose
+  // `as any` or runtime-built spec would slip through.
   const handlerNames = new Set(handlers.map((h) => h.name));
-  const triggers: EdgeAppTrigger[] = (spec.triggers ?? []).map((t) => {
-    if (!handlerNames.has(t.handler)) {
+  const checkHandler = (label: string, name: string): void => {
+    if (!handlerNames.has(name)) {
       throw new Error(
-        `edge app trigger '${t.name}' references handler '${t.handler}', ` +
-          `which isn't defined on this manifest. Known handlers: ` +
-          `${[...handlerNames].join(", ") || "(none)"}.`,
+        `${label} references handler '${name}', which isn't defined on this ` +
+          `manifest. Known handlers: ${[...handlerNames].join(", ") || "(none)"}.`,
       );
     }
+  };
+
+  const triggers: EdgeAppTrigger[] = (spec.triggers ?? []).map((t) => {
+    checkHandler(`trigger '${t.name}'`, t.handler);
     return {
       kind: t.kind,
       name: t.name,
@@ -396,6 +413,41 @@ function loadTsEdgeApp(spec: EdgeAppV2, absPath: string): LoadedManifest {
       pattern: "pattern" in t ? t.pattern : undefined,
     };
   });
+
+  // I/O config — pass-through with handler validation. Cast through
+  // `unknown` to align the discriminated-union author types with the
+  // wire types (which carry every optional field on every variant).
+  const mqttBrokers = (spec.mqttBrokers ?? []) as unknown as EdgeAppMQTTBroker[];
+  for (const b of mqttBrokers) {
+    for (const s of b.subscriptions ?? []) {
+      checkHandler(`MQTT broker '${b.name}' subscription '${s.topic}'`, s.handler);
+    }
+  }
+  const opcuaEndpoints = (spec.opcuaEndpoints ?? []) as unknown as EdgeAppOPCUAEndpoint[];
+  for (const e of opcuaEndpoints) {
+    for (const s of e.subscriptions ?? []) {
+      checkHandler(`OPC UA endpoint '${e.name}' nodeId '${s.nodeId}'`, s.handler);
+    }
+  }
+  const snmpDevices = (spec.snmpDevices ?? []) as unknown as EdgeAppSNMPDevice[];
+  for (const d of snmpDevices) {
+    for (const g of d.pollGroups ?? []) {
+      checkHandler(`SNMP device '${d.name}' poll-group '${g.name}'`, g.handler);
+    }
+  }
+  const modbusPorts = (spec.modbusPorts ?? []) as unknown as EdgeAppModbusPort[];
+  for (const p of modbusPorts) {
+    for (const sl of p.slaves ?? []) {
+      for (const g of sl.pollGroups ?? []) {
+        checkHandler(`Modbus port '${p.name}' slave '${sl.name}' group '${g.name}'`, g.handler);
+      }
+    }
+  }
+  const execCommands = (spec.execCommands ?? []) as unknown as EdgeAppExecCommand[];
+  const httpRoutes = (spec.httpRoutes ?? []) as unknown as EdgeAppHTTPRoute[];
+  for (const r of httpRoutes) {
+    checkHandler(`HTTP route ${r.method} ${r.path}`, r.handler);
+  }
 
   const app: EdgeAppWire = {
     handle: spec.handle,
@@ -415,6 +467,12 @@ function loadTsEdgeApp(spec: EdgeAppV2, absPath: string): LoadedManifest {
   }
   if (spec.logLevel !== undefined) app.log_level = spec.logLevel;
   if (spec.isActive !== undefined) app.is_active = spec.isActive;
+  if (mqttBrokers.length > 0) app.mqtt_brokers = mqttBrokers;
+  if (opcuaEndpoints.length > 0) app.opcua_endpoints = opcuaEndpoints;
+  if (snmpDevices.length > 0) app.snmp_devices = snmpDevices;
+  if (modbusPorts.length > 0) app.modbus_ports = modbusPorts;
+  if (execCommands.length > 0) app.exec_commands = execCommands;
+  if (httpRoutes.length > 0) app.http_routes = httpRoutes;
 
   return { kind: "edge", app, format: "ts", consumed, manifestSourceOrigins: origins };
 }

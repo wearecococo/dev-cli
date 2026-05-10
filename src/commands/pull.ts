@@ -237,6 +237,12 @@ async function runPullEdgeApp(
         : undefined,
       onMessagePath,
       configSchema: remote.configSchema,
+      mqttBrokers: remote.mqttBrokers.length ? remote.mqttBrokers : undefined,
+      opcuaEndpoints: remote.opcuaEndpoints.length ? remote.opcuaEndpoints : undefined,
+      snmpDevices: remote.snmpDevices.length ? remote.snmpDevices : undefined,
+      modbusPorts: remote.modbusPorts.length ? remote.modbusPorts : undefined,
+      execCommands: remote.execCommands.length ? remote.execCommands : undefined,
+      httpRoutes: remote.httpRoutes.length ? remote.httpRoutes : undefined,
       triggers: remote.triggers.map((t) => {
         if (t.kind === "CRON") {
           return { kind: "CRON", name: t.name, handler: t.handler, schedule: t.schedule ?? "" };

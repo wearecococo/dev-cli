@@ -8,8 +8,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { printManifestTs } from "../src/printer.ts";
-import { loadManifest } from "../src/loader.ts";
+import { printManifestTs, printEdgeAppManifestTs } from "../src/printer.ts";
+import { expectEdge, loadManifest } from "../src/loader.ts";
 import type { WireManifest } from "../src/manifest.ts";
 
 let root: string;
@@ -104,6 +104,141 @@ describe("printManifestTs", () => {
       permissions: [],
     };
     expect(() => printManifestTs(wire)).toThrow(/v2-only|--format yaml/i);
+  });
+});
+
+describe("printEdgeAppManifestTs — I/O config", () => {
+  test("emits I/O blocks with ${config:...} placeholders for write-only secrets", async () => {
+    const printed = printEdgeAppManifestTs({
+      handle: "io-shop",
+      name: "IO Shop",
+      handlers: [{ name: "onMsg", path: "handlers/onMsg.lua" }],
+      triggers: [],
+      mqttBrokers: [
+        {
+          name: "broker1",
+          url: "mqtt://b:1883",
+          username: "alice",
+          // password omitted by server — printer fills placeholder
+          subscriptions: [{ topic: "data/#", handler: "onMsg" }],
+        },
+      ],
+      opcuaEndpoints: [
+        {
+          name: "press",
+          endpoint: "opc.tcp://press:4840",
+          subscriptions: [{ nodeId: "ns=2;s=Temp", handler: "onMsg" }],
+          auth: { mode: "USERNAME", username: "u" }, // password missing
+        },
+      ],
+      snmpDevices: [
+        {
+          name: "sw1",
+          host: "10.0.0.10",
+          version: "V3",
+          v3: {
+            user: "monitor",
+            authProtocol: "SHA256",
+            privProtocol: "AES128",
+            // authKey + privKey both omitted by server
+          },
+          pollGroups: [
+            {
+              name: "uptime",
+              intervalMs: 5000,
+              handler: "onMsg",
+              oids: [{ label: "uptime", oid: "1.3.6.1.2.1.1.3.0" }],
+            },
+          ],
+        },
+      ],
+      modbusPorts: [
+        {
+          name: "plc1",
+          transport: "TCP",
+          host: "10.0.0.1",
+          slaves: [
+            {
+              name: "main",
+              unitId: 1,
+              pollGroups: [
+                {
+                  name: "g1",
+                  intervalMs: 1000,
+                  handler: "onMsg",
+                  reads: [
+                    {
+                      label: "x",
+                      function: "INPUT",
+                      address: 0,
+                      quantity: 1,
+                      type: "UINT16",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      execCommands: [
+        { name: "ping", path: "/usr/bin/ping", args: ["-c", "1"], timeoutMs: 5000 },
+      ],
+      httpRoutes: [
+        {
+          method: "POST",
+          path: "/webhook",
+          handler: "onMsg",
+          auth: { mode: "BEARER" }, // bearerTokens missing
+        },
+      ],
+    });
+
+    // Placeholders for the secrets the server doesn't return.
+    expect(printed).toContain("${config:IO_SHOP_MQTT_BROKER1_PASSWORD}");
+    expect(printed).toContain("${config:IO_SHOP_OPCUA_PRESS_PASSWORD}");
+    expect(printed).toContain("${config:IO_SHOP_SNMP_SW1_AUTH_KEY}");
+    expect(printed).toContain("${config:IO_SHOP_SNMP_SW1_PRIV_KEY}");
+    expect(printed).toContain("${config:IO_SHOP_HTTP_POST_WEBHOOK_BEARER}");
+    // Banner explains the placeholders.
+    expect(printed).toMatch(/secrets.*aren't returned/i);
+
+    // Round-trip: write it next to a stub handler and load it back.
+    mkdirSync(join(root, "handlers"));
+    writeFileSync(join(root, "handlers/onMsg.lua"), 'bridge.log.info("msg")\n');
+    const rewired = printed.replace(
+      `from "@wearecococo/dev-cli/define"`,
+      `from "${absDefineImportSpec()}"`,
+    );
+    writeFileSync(join(root, "manifest.ts"), rewired);
+
+    const loaded = await loadManifest(root);
+    const edge = expectEdge(loaded);
+    expect(edge.app.mqtt_brokers?.[0]?.password).toContain("config:");
+    expect(edge.app.opcua_endpoints?.[0]?.auth?.password).toContain("config:");
+    expect(edge.app.snmp_devices?.[0]?.v3?.authKey).toContain("config:");
+    expect(edge.app.http_routes?.[0]?.auth.bearerTokens?.[0]).toContain("config:");
+    expect(edge.app.modbus_ports?.[0]?.transport).toBe("TCP");
+    expect(edge.app.exec_commands?.[0]?.path).toBe("/usr/bin/ping");
+  });
+
+  test("omits the placeholder banner when no secrets are missing", () => {
+    const printed = printEdgeAppManifestTs({
+      handle: "plain",
+      name: "Plain",
+      handlers: [{ name: "onMsg", path: "handlers/onMsg.lua" }],
+      triggers: [],
+      mqttBrokers: [
+        {
+          name: "anon",
+          url: "mqtt://b:1883",
+          // no username → no placeholder needed
+          subscriptions: [{ topic: "x", handler: "onMsg" }],
+        },
+      ],
+    });
+    expect(printed).not.toMatch(/aren't returned/i);
+    expect(printed).not.toContain("${config:");
   });
 });
 

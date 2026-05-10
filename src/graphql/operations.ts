@@ -618,6 +618,195 @@ export type EdgeAppLibrary = {
   source: string;
 };
 
+// ── External I/O config sub-types ─────────────────────────────────────
+// These are all declarative records that pass through the upsertEdgeApp
+// input verbatim — no Lua resolution, no special transformation.
+// Secret-bearing string fields accept literal values OR `${config:NAME}`
+// templates resolved per-installation; the CLI doesn't manipulate
+// either form. camelCase throughout to match the GraphQL input shapes.
+
+export type EdgeAppMQTTSubscription = {
+  topic: string;
+  handler: string;
+};
+
+export type EdgeAppMQTTTLS = {
+  caCertPem: string;
+  clientCertPem?: string;
+  clientKeyPem?: string;
+  insecureSkipVerify?: boolean;
+};
+
+export type EdgeAppMQTTWill = {
+  topic: string;
+  payload?: string;
+  qos?: number;
+  retain?: boolean;
+};
+
+export type EdgeAppMQTTBroker = {
+  name: string;
+  url: string;
+  clientId?: string;
+  username?: string;
+  password?: string;
+  keepaliveSeconds?: number;
+  qos?: number;
+  subscriptions: EdgeAppMQTTSubscription[];
+  tls?: EdgeAppMQTTTLS;
+  will?: EdgeAppMQTTWill;
+};
+
+export type EdgeAppOPCUAAuthMode = "ANONYMOUS" | "USERNAME" | "CERTIFICATE";
+export type EdgeAppOPCUASecurityPolicy =
+  | "NONE"
+  | "BASIC128_RSA15"
+  | "BASIC256"
+  | "BASIC256_SHA256";
+export type EdgeAppOPCUASecurityMode = "NONE" | "SIGN" | "SIGN_AND_ENCRYPT";
+
+export type EdgeAppOPCUASubscription = {
+  nodeId: string;
+  handler: string;
+  samplingMs?: number;
+  queueSize?: number;
+};
+
+export type EdgeAppOPCUAAuth = {
+  mode: EdgeAppOPCUAAuthMode;
+  username?: string;
+  password?: string;
+};
+
+export type EdgeAppOPCUASecurity = {
+  policy: EdgeAppOPCUASecurityPolicy;
+  mode: EdgeAppOPCUASecurityMode;
+  clientCertPem?: string;
+  clientKeyPem?: string;
+};
+
+export type EdgeAppOPCUAEndpoint = {
+  name: string;
+  endpoint: string;
+  subscriptions: EdgeAppOPCUASubscription[];
+  auth?: EdgeAppOPCUAAuth;
+  security?: EdgeAppOPCUASecurity;
+  reconnectIntervalMs?: number;
+};
+
+export type EdgeAppSNMPVersion = "V2C" | "V3";
+export type EdgeAppSNMPAuthProtocol =
+  | "MD5"
+  | "SHA1"
+  | "SHA224"
+  | "SHA256"
+  | "SHA384"
+  | "SHA512";
+export type EdgeAppSNMPPrivProtocol = "DES" | "AES128" | "AES192" | "AES256";
+
+export type EdgeAppSNMPOIDEntry = { label: string; oid: string };
+
+export type EdgeAppSNMPPollGroup = {
+  name: string;
+  intervalMs: number;
+  handler: string;
+  oids?: EdgeAppSNMPOIDEntry[];
+  walkPrefixes?: EdgeAppSNMPOIDEntry[];
+};
+
+export type EdgeAppSNMPv3 = {
+  user: string;
+  authProtocol?: EdgeAppSNMPAuthProtocol;
+  authKey?: string;
+  privProtocol?: EdgeAppSNMPPrivProtocol;
+  privKey?: string;
+  contextName?: string;
+};
+
+export type EdgeAppSNMPDevice = {
+  name: string;
+  host: string;
+  version: EdgeAppSNMPVersion;
+  pollGroups: EdgeAppSNMPPollGroup[];
+  port?: number;
+  community?: string;
+  v3?: EdgeAppSNMPv3;
+  timeoutMs?: number;
+  retries?: number;
+};
+
+export type EdgeAppModbusTransport = "TCP" | "RTU" | "RTU_OVER_TCP";
+export type EdgeAppModbusParity = "NONE" | "EVEN" | "ODD";
+export type EdgeAppModbusFunction = "HOLDING" | "INPUT" | "COILS" | "DISCRETE";
+
+export type EdgeAppModbusRead = {
+  label: string;
+  function: EdgeAppModbusFunction;
+  address: number;
+  quantity: number;
+  /** Decoding type — kept loose because the platform schema enumerates many. */
+  type: string;
+  scale?: number;
+  wordOrder?: string;
+  byteOrder?: string;
+};
+
+export type EdgeAppModbusPollGroup = {
+  name: string;
+  intervalMs: number;
+  reads: EdgeAppModbusRead[];
+  handler: string;
+};
+
+export type EdgeAppModbusSlave = {
+  name: string;
+  unitId: number;
+  pollGroups: EdgeAppModbusPollGroup[];
+};
+
+export type EdgeAppModbusPort = {
+  name: string;
+  transport: EdgeAppModbusTransport;
+  slaves: EdgeAppModbusSlave[];
+  host?: string;
+  port?: number;
+  serialPath?: string;
+  baudRate?: number;
+  parity?: EdgeAppModbusParity;
+  stopBits?: number;
+  dataBits?: number;
+};
+
+export type EdgeAppExecEnvEntry = { name: string; value: string };
+
+export type EdgeAppExecCommand = {
+  name: string;
+  path: string;
+  args: string[];
+  outputs?: string[];
+  timeoutMs?: number;
+  maxStdoutBytes?: number;
+  env?: EdgeAppExecEnvEntry[];
+};
+
+export type EdgeAppHTTPMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "ANY";
+export type EdgeAppHTTPAuthMode = "NONE" | "BASIC" | "BEARER";
+
+export type EdgeAppHTTPAuth = {
+  mode: EdgeAppHTTPAuthMode;
+  basicCredentials?: string[];
+  bearerTokens?: string[];
+};
+
+export type EdgeAppHTTPRoute = {
+  method: EdgeAppHTTPMethod;
+  path: string;
+  handler: string;
+  auth: EdgeAppHTTPAuth;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
+
 export type EdgeAppState = {
   id: string;
   handle: string;
@@ -628,6 +817,12 @@ export type EdgeAppState = {
   triggers: EdgeAppTrigger[];
   handlers: EdgeAppHandler[];
   libraries: EdgeAppLibrary[];
+  mqttBrokers: EdgeAppMQTTBroker[];
+  opcuaEndpoints: EdgeAppOPCUAEndpoint[];
+  snmpDevices: EdgeAppSNMPDevice[];
+  modbusPorts: EdgeAppModbusPort[];
+  execCommands: EdgeAppExecCommand[];
+  httpRoutes: EdgeAppHTTPRoute[];
   onMessage?: string | null;
   configSchema?: unknown;
   logLevel?: EdgeAppLogLevel | null;
@@ -654,6 +849,45 @@ const EDGE_APP_FULL = `
   triggers { kind name handler schedule path pattern }
   handlers { name source }
   libraries { name source }
+  mqttBrokers {
+    name url clientId username keepaliveSeconds qos
+    subscriptions { topic handler }
+    tls { caCertPem clientCertPem clientKeyPem insecureSkipVerify }
+    will { topic payload qos retain }
+  }
+  opcuaEndpoints {
+    name endpoint reconnectIntervalMs
+    subscriptions { nodeId handler samplingMs queueSize }
+    auth { mode username }
+    security { policy mode clientCertPem clientKeyPem }
+  }
+  snmpDevices {
+    name host version port community timeoutMs retries
+    pollGroups {
+      name intervalMs handler
+      oids { label oid }
+      walkPrefixes { label oid }
+    }
+    v3 { user authProtocol privProtocol contextName }
+  }
+  modbusPorts {
+    name transport host port serialPath baudRate parity stopBits dataBits
+    slaves {
+      name unitId
+      pollGroups {
+        name intervalMs handler
+        reads { label function address quantity type scale wordOrder byteOrder }
+      }
+    }
+  }
+  execCommands {
+    name path args outputs timeoutMs maxStdoutBytes
+    env { name value }
+  }
+  httpRoutes {
+    method path handler maxBodyBytes timeoutMs
+    auth { mode }
+  }
   onMessage
   configSchema
 `;
@@ -720,6 +954,12 @@ export async function upsertEdgeApp(
     triggers: EdgeAppTrigger[];
     handlers: EdgeAppHandler[];
     libraries?: EdgeAppLibrary[];
+    mqttBrokers?: EdgeAppMQTTBroker[];
+    opcuaEndpoints?: EdgeAppOPCUAEndpoint[];
+    snmpDevices?: EdgeAppSNMPDevice[];
+    modbusPorts?: EdgeAppModbusPort[];
+    execCommands?: EdgeAppExecCommand[];
+    httpRoutes?: EdgeAppHTTPRoute[];
     onMessage?: string;
     configSchema?: unknown;
     logLevel?: EdgeAppLogLevel;
@@ -774,4 +1014,31 @@ export async function publishEdgeAppDraft(
     throw new Error(`publishEdgeAppDraft returned no edgeApp and no errors.`);
   }
   return data.publishEdgeAppDraft.edgeApp;
+}
+
+export async function deprecateEdgeApp(
+  client: GraphQLClient,
+  id: string,
+): Promise<EdgeAppState> {
+  const query = `
+    mutation DeprecateEdgeApp($id: EdgeAppID!) {
+      deprecateEdgeApp(id: $id) {
+        edgeApp { ${EDGE_APP_FULL} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    deprecateEdgeApp: { edgeApp: EdgeAppState | null; errors: FieldError[] };
+  }>(query, { id });
+  if (data.deprecateEdgeApp.errors.length > 0) {
+    const summary = data.deprecateEdgeApp.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`deprecateEdgeApp failed: ${summary}`);
+  }
+  if (!data.deprecateEdgeApp.edgeApp) {
+    throw new Error(`deprecateEdgeApp returned no edgeApp and no errors.`);
+  }
+  return data.deprecateEdgeApp.edgeApp;
 }

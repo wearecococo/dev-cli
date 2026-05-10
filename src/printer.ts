@@ -7,7 +7,13 @@ import {
 import type { WireManifest } from "./manifest.ts";
 import type {
   CustomAppKind,
+  EdgeAppExecCommand,
+  EdgeAppHTTPRoute,
   EdgeAppLogLevel,
+  EdgeAppModbusPort,
+  EdgeAppMQTTBroker,
+  EdgeAppOPCUAEndpoint,
+  EdgeAppSNMPDevice,
 } from "./graphql/operations.ts";
 
 /**
@@ -255,6 +261,17 @@ export type EdgeAppPrintInput = {
   /** Already a JSON-encoded string when present; will be `JSON.parse`d. */
   configSchema?: unknown;
   triggers: EdgeAppPrintTrigger[];
+  // I/O config — passed through verbatim from the server, with one
+  // exception: write-only secrets the server doesn't return (MQTT
+  // password, OPC UA USERNAME password, SNMP v3 keys, HTTP credentials)
+  // are filled in with `${config:...}` template-string placeholders so
+  // the printed manifest typechecks and round-trips through push.
+  mqttBrokers?: EdgeAppMQTTBroker[];
+  opcuaEndpoints?: EdgeAppOPCUAEndpoint[];
+  snmpDevices?: EdgeAppSNMPDevice[];
+  modbusPorts?: EdgeAppModbusPort[];
+  execCommands?: EdgeAppExecCommand[];
+  httpRoutes?: EdgeAppHTTPRoute[];
 };
 
 export function printEdgeAppManifestTs(input: EdgeAppPrintInput): string {
@@ -303,9 +320,149 @@ export function printEdgeAppManifestTs(input: EdgeAppPrintInput): string {
     }
   }
 
+  let placeholderEmitted = false;
+  const placeholder = (suffix: string): string => {
+    placeholderEmitted = true;
+    return `\${config:${configKey(input.handle, suffix)}}`;
+  };
+
+  if (input.mqttBrokers && input.mqttBrokers.length > 0) {
+    body.mqttBrokers = input.mqttBrokers.map((b) =>
+      transformMqttBroker(b, placeholder),
+    );
+  }
+  if (input.opcuaEndpoints && input.opcuaEndpoints.length > 0) {
+    body.opcuaEndpoints = input.opcuaEndpoints.map((e) =>
+      transformOpcuaEndpoint(e, placeholder),
+    );
+  }
+  if (input.snmpDevices && input.snmpDevices.length > 0) {
+    body.snmpDevices = input.snmpDevices.map((d) =>
+      transformSnmpDevice(d, placeholder),
+    );
+  }
+  if (input.modbusPorts && input.modbusPorts.length > 0) {
+    body.modbusPorts = input.modbusPorts.map(stripNulls) as unknown[];
+  }
+  if (input.execCommands && input.execCommands.length > 0) {
+    body.execCommands = input.execCommands.map(stripNulls) as unknown[];
+  }
+  if (input.httpRoutes && input.httpRoutes.length > 0) {
+    body.httpRoutes = input.httpRoutes.map((r) =>
+      transformHttpRoute(r, placeholder),
+    );
+  }
+
+  const banner = placeholderEmitted
+    ? `// NOTE: Some secrets (passwords / API tokens / SNMP keys) aren't returned\n` +
+      `// by the server on pull, so the printer filled them in with\n` +
+      `// \${config:...} template-string placeholders. Either replace them with\n` +
+      `// real values before pushing, or define the corresponding config keys\n` +
+      `// per-installation so the platform substitutes them at runtime.\n\n`
+    : "";
+
   return (
+    banner +
     `import { defineEdgeApp, luaFile } from "@wearecococo/dev-cli/define";\n\n` +
     `export default defineEdgeApp(${printObject(body, 0)});\n`
   );
+}
+
+/**
+ * Build a stable, uppercase config key for a placeholder. The handle
+ * disambiguates across edge apps in the same tenant; the suffix
+ * disambiguates within the manifest. Non-identifier characters are
+ * collapsed to underscores so the key remains a valid config name.
+ */
+function configKey(handle: string, suffix: string): string {
+  const sanitize = (s: string): string =>
+    s.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase();
+  return `${sanitize(handle)}_${sanitize(suffix)}`;
+}
+
+/**
+ * Recursively turn nulls into undefined and strip empty optional
+ * collections — printObject filters undefined but keeps null, which
+ * would emit `field: null` in the manifest. Cleaner output without it.
+ */
+function stripNulls(value: unknown): unknown {
+  if (value === null) return undefined;
+  if (Array.isArray(value)) {
+    return value.map(stripNulls).filter((v) => v !== undefined);
+  }
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const cleaned = stripNulls(v);
+      if (cleaned !== undefined) out[k] = cleaned;
+    }
+    return out;
+  }
+  return value;
+}
+
+function transformMqttBroker(
+  b: EdgeAppMQTTBroker,
+  placeholder: (suffix: string) => string,
+): unknown {
+  const out = stripNulls(b) as Record<string, unknown>;
+  // Server doesn't return password. If a username is set, fill in a
+  // placeholder so the credential pair is at least visible in the
+  // printed manifest.
+  if (typeof out.username === "string" && out.password === undefined) {
+    out.password = placeholder(`MQTT_${b.name}_PASSWORD`);
+  }
+  return out;
+}
+
+function transformOpcuaEndpoint(
+  e: EdgeAppOPCUAEndpoint,
+  placeholder: (suffix: string) => string,
+): unknown {
+  const out = stripNulls(e) as Record<string, unknown>;
+  const auth = out.auth as Record<string, unknown> | undefined;
+  if (auth && auth.mode === "USERNAME" && auth.password === undefined) {
+    auth.password = placeholder(`OPCUA_${e.name}_PASSWORD`);
+  }
+  return out;
+}
+
+function transformSnmpDevice(
+  d: EdgeAppSNMPDevice,
+  placeholder: (suffix: string) => string,
+): unknown {
+  const out = stripNulls(d) as Record<string, unknown>;
+  const v3 = out.v3 as Record<string, unknown> | undefined;
+  if (v3) {
+    if (v3.authProtocol !== undefined && v3.authKey === undefined) {
+      v3.authKey = placeholder(`SNMP_${d.name}_AUTH_KEY`);
+    }
+    if (v3.privProtocol !== undefined && v3.privKey === undefined) {
+      v3.privKey = placeholder(`SNMP_${d.name}_PRIV_KEY`);
+    }
+  }
+  return out;
+}
+
+function transformHttpRoute(
+  r: EdgeAppHTTPRoute,
+  placeholder: (suffix: string) => string,
+): unknown {
+  const out = stripNulls(r) as Record<string, unknown>;
+  const auth = out.auth as Record<string, unknown> | undefined;
+  if (auth) {
+    // The HTTPRouteAuth discriminated union *requires* basicCredentials /
+    // bearerTokens to be present for BASIC / BEARER. Server omits them
+    // on pull, so we have to fill in placeholders or the printed manifest
+    // won't typecheck.
+    const slug = `${r.method}_${r.path}`;
+    if (auth.mode === "BASIC" && !Array.isArray(auth.basicCredentials)) {
+      auth.basicCredentials = [placeholder(`HTTP_${slug}_BASIC`)];
+    }
+    if (auth.mode === "BEARER" && !Array.isArray(auth.bearerTokens)) {
+      auth.bearerTokens = [placeholder(`HTTP_${slug}_BEARER`)];
+    }
+  }
+  return out;
 }
 

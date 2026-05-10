@@ -278,6 +278,76 @@ Lua handlers / libraries / `onMessage` validate under the **`EDGE_APP`**
 role automatically — `bridge.*` APIs are visible, `ctx.integration.*`
 is not.
 
+### External I/O config
+
+Edge apps can declare external connections to MQTT brokers, OPC UA
+endpoints, SNMP devices, Modbus ports, exec commands, and HTTP inbound
+routes. Each has its own array on the manifest:
+
+```ts
+export default defineEdgeApp({
+  handle: "press-monitor",
+  name: "Press Monitor",
+  handlers: { onTemp: luaFile("./handlers/onTemp.lua") },
+  triggers: [],
+
+  mqttBrokers: [
+    {
+      name: "site",
+      url: "mqtt://broker.site:1883",
+      // ${config:NAME} resolves per-installation; never log it.
+      password: "${config:MQTT_PASSWORD}",
+      subscriptions: [{ topic: "press/+/temp", handler: "onTemp" }],
+    },
+  ],
+
+  opcuaEndpoints: [
+    {
+      name: "press",
+      endpoint: "opc.tcp://press:4840",
+      subscriptions: [{ nodeId: "ns=2;s=PressTemp", handler: "onTemp" }],
+      auth: { mode: "USERNAME", username: "monitor", password: "${config:OPC_PWD}" },
+      security: { policy: "NONE", mode: "NONE" },
+    },
+  ],
+
+  modbusPorts: [
+    {
+      transport: "TCP",
+      name: "plc1",
+      host: "10.0.0.1",
+      slaves: [{ name: "main", unitId: 1, pollGroups: [/* ... */] }],
+    },
+  ],
+
+  httpRoutes: [
+    {
+      method: "POST",
+      path: "/webhook",
+      handler: "onTemp",
+      auth: { mode: "BEARER", bearerTokens: ["${config:HOOK_TOKEN}"] },
+    },
+  ],
+
+  // …plus snmpDevices, execCommands as needed.
+});
+```
+
+The TS shapes are **discriminated unions** — the compiler enforces:
+
+- `auth.mode === "USERNAME"` requires `username` + `password` (OPC UA)
+- `auth.mode === "BASIC"` requires `basicCredentials`, `BEARER` requires `bearerTokens` (HTTP routes)
+- `transport: "TCP"` requires `host`, `transport: "RTU"` requires `serialPath` + serial fields (Modbus)
+- `version: "V2C"` uses `community`, `version: "V3"` requires the `v3` block (SNMP)
+- And every `handler` field — across MQTT subscriptions, OPC UA subscriptions, SNMP poll groups, Modbus poll groups, HTTP routes — is constrained to a key of `handlers`
+
+Secret-bearing string fields (passwords, PEMs, bearer tokens, SNMP keys)
+accept literal values **or** `${config:NAME}` templates that resolve to
+per-installation variables — the CLI never sees the resolved values, so
+secrets stay on the controller side.
+
+See the platform docs for the full per-protocol field reference.
+
 ## Daily workflow
 
 These commands work the same way for all three kinds — they dispatch by
@@ -401,6 +471,7 @@ on PATH, you get the skeleton plus a self-contained prompt at
 | `cococo lint [folder] [--strict]` | Validate every Lua chunk via the server |
 | `cococo validate [folder]` | Server-validate the remote draft (integrations only) |
 | `cococo publish [folder]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED) |
+| `cococo deprecate [folder]` | Retire the PUBLISHED definition. Integrations: ACTIVE → DEPRECATED. Edge apps: PUBLISHED → DEPRECATED. Existing installations keep working until upgraded. Custom apps don't apply |
 | `cococo pull <id\|handle> [--type app\|edge] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |

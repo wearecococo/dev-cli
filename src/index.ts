@@ -7,6 +7,7 @@ import { runStatus } from "./commands/status.ts";
 import { runPush } from "./commands/push.ts";
 import { runValidate } from "./commands/validate.ts";
 import { runPublish } from "./commands/publish.ts";
+import { runDeprecate } from "./commands/deprecate.ts";
 import { runPull } from "./commands/pull.ts";
 import { runMigrate } from "./commands/migrate.ts";
 import { runSetupMcp } from "./commands/setup-mcp.ts";
@@ -143,6 +144,17 @@ program
   .description("Validate and publish the remote draft for a local integration folder.")
   .action(async (folder: string | undefined) => {
     await runPublish(folder, apiOpts());
+  });
+
+program
+  .command("deprecate [folder]")
+  .description(
+    "Deprecate the PUBLISHED definition for an integration or edge app. " +
+      "Existing installations keep working until upgraded; new installations are blocked. " +
+      "Custom apps don't have a deprecate concept.",
+  )
+  .action(async (folder: string | undefined) => {
+    await runDeprecate(folder, apiOpts());
   });
 
 program

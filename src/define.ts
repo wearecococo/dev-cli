@@ -308,11 +308,207 @@ export type EdgeAppTrigger<HandlerName extends string> =
       pattern?: string;
     };
 
+// ── External I/O config — author-surface types ────────────────────────
+// All `handler` fields below carry the same `keyof H` constraint as
+// `EdgeAppTrigger`, so any handler reference (subscriptions, poll
+// groups, HTTP routes) is checked against the literal keys of
+// `handlers` at edit time. Discriminated unions on variant config
+// (SNMP version, Modbus transport, HTTP auth, OPC UA auth/security)
+// make the required fields per variant explicit.
+
+export type MQTTSubscription<H extends string> = {
+  topic: string;
+  handler: H;
+};
+
+export type MQTTBroker<H extends string> = {
+  name: string;
+  url: string;
+  clientId?: string;
+  username?: string;
+  /** Literal password or a `${config:NAME}` template resolved per-installation. */
+  password?: string;
+  keepaliveSeconds?: number;
+  qos?: 0 | 1 | 2;
+  subscriptions: Array<MQTTSubscription<H>>;
+  tls?: {
+    /** Server CA. Literal PEM or `${config:NAME}` template. */
+    caCertPem: string;
+    clientCertPem?: string;
+    clientKeyPem?: string;
+    insecureSkipVerify?: boolean;
+  };
+  will?: {
+    topic: string;
+    payload?: string;
+    qos?: 0 | 1 | 2;
+    retain?: boolean;
+  };
+};
+
+export type OPCUASubscription<H extends string> = {
+  /** OPC UA NodeId, e.g. `ns=2;s=PressTemp`. */
+  nodeId: string;
+  handler: H;
+  samplingMs?: number;
+  queueSize?: number;
+};
+
+/** OPC UA user-identification — discriminated on `mode`. */
+export type OPCUAAuth =
+  | { mode: "ANONYMOUS" }
+  | { mode: "USERNAME"; username: string; password: string }
+  | { mode: "CERTIFICATE" };
+
+/**
+ * OPC UA channel-security — discriminated on whether `policy === "NONE"`.
+ * Non-NONE policies require `clientCertPem` + `clientKeyPem`.
+ */
+export type OPCUASecurity =
+  | { policy: "NONE"; mode: "NONE" }
+  | {
+      policy: "BASIC128_RSA15" | "BASIC256" | "BASIC256_SHA256";
+      mode: "SIGN" | "SIGN_AND_ENCRYPT";
+      clientCertPem: string;
+      clientKeyPem: string;
+    };
+
+export type OPCUAEndpoint<H extends string> = {
+  name: string;
+  /** OPC UA URL, e.g. `opc.tcp://...`. */
+  endpoint: string;
+  subscriptions: Array<OPCUASubscription<H>>;
+  auth?: OPCUAAuth;
+  security?: OPCUASecurity;
+  reconnectIntervalMs?: number;
+};
+
+export type SNMPOIDEntry = { label: string; oid: string };
+
+export type SNMPPollGroup<H extends string> = {
+  name: string;
+  intervalMs: number;
+  handler: H;
+  oids?: SNMPOIDEntry[];
+  walkPrefixes?: SNMPOIDEntry[];
+};
+
+/**
+ * SNMP device — discriminated on `version`. v2c uses `community`; v3
+ * uses the `v3` block (with optional auth + priv).
+ */
+export type SNMPDevice<H extends string> =
+  | {
+      version: "V2C";
+      name: string;
+      host: string;
+      pollGroups: Array<SNMPPollGroup<H>>;
+      community?: string;
+      port?: number;
+      timeoutMs?: number;
+      retries?: number;
+    }
+  | {
+      version: "V3";
+      name: string;
+      host: string;
+      pollGroups: Array<SNMPPollGroup<H>>;
+      v3: {
+        user: string;
+        authProtocol?: "MD5" | "SHA1" | "SHA224" | "SHA256" | "SHA384" | "SHA512";
+        authKey?: string;
+        privProtocol?: "DES" | "AES128" | "AES192" | "AES256";
+        privKey?: string;
+        contextName?: string;
+      };
+      port?: number;
+      timeoutMs?: number;
+      retries?: number;
+    };
+
+export type ModbusRead = {
+  /** Surfaces in the handler payload as `params.values.<label>`. */
+  label: string;
+  function: "HOLDING" | "INPUT" | "COILS" | "DISCRETE";
+  address: number;
+  quantity: number;
+  /** Decoding type — see platform docs for the full enum. */
+  type: string;
+  scale?: number;
+  wordOrder?: string;
+  byteOrder?: string;
+};
+
+export type ModbusPollGroup<H extends string> = {
+  name: string;
+  intervalMs: number;
+  reads: ModbusRead[];
+  handler: H;
+};
+
+export type ModbusSlave<H extends string> = {
+  name: string;
+  unitId: number;
+  pollGroups: Array<ModbusPollGroup<H>>;
+};
+
+/**
+ * Modbus port — discriminated on `transport`. TCP / RTU_OVER_TCP use
+ * host + port; RTU uses the serial fields.
+ */
+export type ModbusPort<H extends string> =
+  | {
+      transport: "TCP" | "RTU_OVER_TCP";
+      name: string;
+      slaves: Array<ModbusSlave<H>>;
+      host: string;
+      port?: number;
+    }
+  | {
+      transport: "RTU";
+      name: string;
+      slaves: Array<ModbusSlave<H>>;
+      serialPath: string;
+      baudRate?: number;
+      parity?: "NONE" | "EVEN" | "ODD";
+      stopBits?: 1 | 2;
+      dataBits?: 5 | 6 | 7 | 8 | 9;
+    };
+
+export type ExecCommand = {
+  name: string;
+  /** Absolute path to the binary. */
+  path: string;
+  /** argv template; supports `${input}` and `${output:NAME}` placeholders. */
+  args: string[];
+  outputs?: string[];
+  timeoutMs?: number;
+  maxStdoutBytes?: number;
+  env?: Array<{ name: string; value: string }>;
+};
+
+/** HTTP inbound route auth — discriminated on `mode`. */
+export type HTTPRouteAuth =
+  | { mode: "NONE" }
+  | { mode: "BASIC"; basicCredentials: string[] }
+  | { mode: "BEARER"; bearerTokens: string[] };
+
+export type HTTPRoute<H extends string> = {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "ANY";
+  /** Path pattern starting with `/`; supports `{name}` and `{name...}`. */
+  path: string;
+  handler: H;
+  auth: HTTPRouteAuth;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
+
 /**
  * Author surface for an edge app. The `H` type parameter is inferred
- * from the literal keys of `handlers` so `triggers[*].handler` only
- * accepts handler names that exist on the spec — typos and renames
- * surface as compile errors at edit time, not at push time.
+ * from the literal keys of `handlers` so every place a handler name
+ * appears (`triggers`, MQTT subscriptions, OPC UA subscriptions, SNMP
+ * pollGroups, Modbus pollGroups, HTTP routes) is constrained to the
+ * actual keys at compile time.
  */
 export type EdgeAppV2<H extends Record<string, LuaSource> = Record<string, LuaSource>> = {
   /** URL-safe slug, unique per tenant. */
@@ -334,6 +530,14 @@ export type EdgeAppV2<H extends Record<string, LuaSource> = Record<string, LuaSo
   logLevel?: EdgeAppLogLevel;
   /** Default true; flipping to false hides the app from installation pushes. */
   isActive?: boolean;
+
+  // ── External I/O config ────────────────────────────────────────────
+  mqttBrokers?: Array<MQTTBroker<keyof H & string>>;
+  opcuaEndpoints?: Array<OPCUAEndpoint<keyof H & string>>;
+  snmpDevices?: Array<SNMPDevice<keyof H & string>>;
+  modbusPorts?: Array<ModbusPort<keyof H & string>>;
+  execCommands?: ExecCommand[];
+  httpRoutes?: Array<HTTPRoute<keyof H & string>>;
 };
 
 export type EdgeAppDefinition = EdgeAppV2;
