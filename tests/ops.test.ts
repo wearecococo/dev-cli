@@ -327,4 +327,108 @@ export default defineCustomAppTeams([
     );
     await expect(loadOps(root)).rejects.toThrow(/Duplicate custom-app-team binding t → a/);
   });
+
+  test("loads controllers, tokens, and installations", async () => {
+    writeFileSync(
+      join(root, "controllers.ts"),
+      `import { defineControllers } from "${DEFINE_PATH}";
+export default defineControllers([
+  {
+    handle: "press-01",
+    network: "press-floor",
+    name: "Press Floor Controller",
+    host: "192.168.1.10",
+    port: 8443,
+    policy: {
+      allowedIoPaths: ["/var/log/door"],
+      allowedExecBinaries: ["/usr/bin/ping"],
+    },
+  },
+  { handle: "shipping-01", name: "Shipping Bay Controller" },
+]);
+`,
+    );
+    writeFileSync(
+      join(root, "controller_tokens.ts"),
+      `import { defineControllerTokens } from "${DEFINE_PATH}";
+export default defineControllerTokens([
+  { controller: "press-01", name: "primary" },
+  { controller: "press-01", name: "backup", description: "Standby token" },
+]);
+`,
+    );
+    writeFileSync(
+      join(root, "edge_app_installations.ts"),
+      `import { defineEdgeAppInstallations } from "${DEFINE_PATH}";
+export default defineEdgeAppInstallations([
+  {
+    controller: "press-01",
+    app: "door-monitor",
+    version: 3,
+    variables: { LOG_PATH: "/var/log/door" },
+    botUser: "bot@acme.com",
+  },
+]);
+`,
+    );
+
+    const ops = await loadOps(root);
+    expect(ops.controllers).toHaveLength(2);
+    expect(ops.controllers[0]?.handle).toBe("press-01");
+    expect(ops.controllers[0]?.policy?.allowedIoPaths).toEqual(["/var/log/door"]);
+    expect(ops.controllers[1]?.policy).toBeUndefined();
+    expect(ops.controllerTokens).toHaveLength(2);
+    expect(ops.controllerTokens[0]).toMatchObject({ controller: "press-01", name: "primary" });
+    expect(ops.edgeAppInstallations).toHaveLength(1);
+    const inst = ops.edgeAppInstallations[0]!;
+    expect(inst.controller).toBe("press-01");
+    expect(inst.app).toBe("door-monitor");
+    expect(inst.version).toBe(3);
+    expect(inst.variables).toEqual({ LOG_PATH: "/var/log/door" });
+    expect(inst.botUser).toBe("bot@acme.com");
+    expect(ops.files.controllers).toBeDefined();
+    expect(ops.files.controllerTokens).toBeDefined();
+    expect(ops.files.edgeAppInstallations).toBeDefined();
+  });
+
+  test("rejects duplicate controller handles", async () => {
+    writeFileSync(
+      join(root, "controllers.ts"),
+      `import { defineControllers } from "${DEFINE_PATH}";
+export default defineControllers([
+  { handle: "c" },
+  { handle: "c" },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate controller handle 'c'/);
+  });
+
+  test("rejects duplicate (controller, name) token entries", async () => {
+    writeFileSync(
+      join(root, "controller_tokens.ts"),
+      `import { defineControllerTokens } from "${DEFINE_PATH}";
+export default defineControllerTokens([
+  { controller: "c1", name: "t" },
+  { controller: "c1", name: "t" },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate controller token c1\/t/);
+  });
+
+  test("rejects two installs of the same edge-app handle on the same controller", async () => {
+    writeFileSync(
+      join(root, "edge_app_installations.ts"),
+      `import { defineEdgeAppInstallations } from "${DEFINE_PATH}";
+export default defineEdgeAppInstallations([
+  { controller: "c", app: "a", version: 1 },
+  { controller: "c", app: "a", version: 2 },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(
+      /Duplicate edge-app installation a on c.*Only one version/,
+    );
+  });
 });

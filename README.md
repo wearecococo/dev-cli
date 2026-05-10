@@ -17,6 +17,7 @@ builds apps can also configure the platform from the same repo.
 - [Tenant IAM (users + policies)](#tenant-iam-users--policies)
 - [Networks + devices](#networks--devices)
 - [Teams + custom-app assignments](#teams--custom-app-assignments)
+- [Controllers, tokens, edge-app installations](#controllers-tokens-edge-app-installations)
 - [Daily workflow](#daily-workflow)
 - [Migrating v1 integrations](#migrating-v1-integrations)
 - [Reference](#reference)
@@ -25,13 +26,18 @@ builds apps can also configure the platform from the same repo.
 
 ## Quick start
 
-In any Bun project (has a `package.json`):
-
 ```sh
-# Install + configure
-bun add -d "@wearecococo/dev-cli@github:wearecococo/dev-cli#main"
-export COCOCO_ENDPOINT=https://your-tenant.example.com/graphql
-export COCOCO_TOKEN=your-bearer-token
+# One-shot bootstrap a fresh workspace (package.json, .env.example,
+# tsconfig, CLAUDE.md, commented-out ops stubs)
+bunx github:wearecococo/dev-cli cococo bootstrap my-cococo-workspace
+cd my-cococo-workspace
+cp .env.example .env       # then fill in COCOCO_ENDPOINT and COCOCO_TOKEN
+bun install
+
+# …or, if you have credentials already and want to start from existing
+# tenant state, pull it on bootstrap:
+COCOCO_ENDPOINT=…  COCOCO_TOKEN=…  bunx github:wearecococo/dev-cli \
+  cococo bootstrap my-cococo-workspace --pull
 
 # Author an integration
 bunx cococo init com.acme.orders
@@ -47,9 +53,13 @@ bunx cococo publish job-board
 bunx cococo init door-monitor --type edge
 bunx cococo push door-monitor
 bunx cococo publish door-monitor
+
+# …or apply tenant config (users, policies, controllers, etc.)
+# Uncomment entries in the ops stubs at the repo root, then:
+bunx cococo apply
 ```
 
-That's the whole loop: edit files, push, publish.
+That's the whole loop: edit files, push, publish (or apply).
 
 ## Install
 
@@ -601,6 +611,118 @@ edited — drop the entry yourself afterwards.
 `custom_apps/<handle>/manifest.ts`). The app must already exist on the
 server (`cococo push <handle>` first); apply doesn't create apps.
 
+## Controllers, tokens, edge-app installations
+
+Edge apps run on **controllers** (the boxes hosting the bridge). To
+actually install an edge app on a controller, you need three things in
+sequence:
+
+1. The controller exists, with an IO/exec policy that allows what the
+   edge app needs to do.
+2. A token has been minted so the bridge can authenticate.
+3. An installation pinning a specific edge-app version to that
+   controller, with per-installation `variables`.
+
+Three flat files at the repo root cover all of it:
+
+```
+controllers.ts                 # defineControllers([...]) — with inline policy
+controller_tokens.ts           # defineControllerTokens([...])
+edge_app_installations.ts      # defineEdgeAppInstallations([...])
+```
+
+```ts
+// controllers.ts
+import { defineControllers } from "@wearecococo/dev-cli/define";
+export default defineControllers([
+  {
+    handle: "press-01",
+    network: "press-floor",
+    name: "Press Floor Controller",
+    host: "192.168.1.10",
+    port: 8443,
+    policy: {
+      // Both lists are reconciled wholesale — what's listed is
+      // exactly what the bridge gets. Empty list = deny all.
+      allowedIoPaths: ["/var/log/door"],
+      allowedExecBinaries: ["/usr/bin/ping"],
+    },
+  },
+]);
+```
+
+```ts
+// controller_tokens.ts
+import { defineControllerTokens } from "@wearecococo/dev-cli/define";
+export default defineControllerTokens([
+  { controller: "press-01", name: "primary" },
+  { controller: "press-01", name: "backup", description: "Standby" },
+]);
+```
+
+```ts
+// edge_app_installations.ts
+import { defineEdgeAppInstallations } from "@wearecococo/dev-cli/define";
+export default defineEdgeAppInstallations([
+  {
+    controller: "press-01",
+    app: "door-monitor",          // edge-app handle
+    version: 3,                    // pin to a specific PUBLISHED version
+    botUser: "bot@acme.com",       // for bridge.graphql calls
+    variables: {
+      LOG_PATH: "/var/log/door",
+    },
+  },
+]);
+```
+
+Apply chains the whole sequence in dependency order (controllers →
+tokens → installations):
+
+```sh
+bunx cococo apply
+# →   controller + press-01
+#       policy + io=1 exec=1
+#     token + press-01/primary
+#       Connect bundle (save this — never shown again):
+#       eyJhbGciOiJSUzI1NiIs…
+#     install + press-01/door-monitor@v3
+```
+
+**Three semantics.** Tenant-IAM resources are mostly additive at the
+row level; controllers and edge-installs introduce two more patterns:
+
+| Resource | Apply semantics |
+|---|---|
+| Controller row | Additive |
+| Controller `policy` (inline) | Reconciled — both lists wholesale-replaced from the spec |
+| Controller token | **Create-only with existence check** — non-revoked tokens with the same `(controller, name)` skip; missing ones get minted, and the connect bundle prints once |
+| Edge-app installation | Smart upsert — exact-version match updates variables; older version of the same handle on the same controller triggers `upgrade`; otherwise creates fresh |
+
+**The connect bundle is one-shot.** When apply mints a new token, it
+prints a Base64-encoded JSON connect bundle to stdout. The platform
+never returns it again — pipe to a secret manager, paste into the
+bridge config, then move on:
+
+```sh
+bunx cococo apply | tee apply.log
+# extract the bundle from apply.log, save somewhere durable
+```
+
+**Edge-app version pinning.** `version` is an integer matching a
+PUBLISHED row of the edge app on the server. Apply rejects
+installations that target DRAFT rows (those aren't shippable). To
+upgrade an existing install, bump `version` in
+`edge_app_installations.ts` and re-apply — the loop detects the
+older-version install on the same controller and calls
+`upgradeEdgeAppInstallation`, preserving the install's id and any
+non-overwritten state.
+
+**Removals.** `cococo delete controller <handle>`,
+`cococo delete controller-token <controller> <name>` (revoke), and
+`cococo delete edge-app-installation <controller> <app> <version>`.
+Local files aren't edited — drop the entry afterwards.
+
 ## Daily workflow
 
 These commands work the same way for all three kinds — they dispatch by
@@ -720,23 +842,29 @@ devices.ts                                 # defineDevices([...])
 teams.ts                                   # defineTeams([...])
 custom_app_users.ts                        # defineCustomAppUsers([...])
 custom_app_teams.ts                        # defineCustomAppTeams([...])
+controllers.ts                             # defineControllers([...])
+controller_tokens.ts                       # defineControllerTokens([...])
+edge_app_installations.ts                  # defineEdgeAppInstallations([...])
 ```
 
 ### Commands
 
 | Command | Purpose |
 |---|---|
+| `cococo bootstrap [folder] [--pull]` | Scaffold a fresh workspace: package.json, .env.example, tsconfig, ops stubs, CLAUDE.md. `--no-claude-md` to skip the project guide. `--pull` also dumps existing tenant state into the ops files |
+| `cococo claude-md [folder]` | Add (or `--force` refresh) the CLAUDE.md project guide in an existing workspace |
+| `cococo dump <kind\|all> [-f]` | Download tenant ops state from the server into local files. Kinds: `users`, `policies`, `bindings`, `networks`, `devices`, `teams`, `custom-app-users`, `custom-app-teams`, `controllers`, `edge-app-installations`, `all`. Tokens excluded; write-only secrets emit `${config:NAME}` placeholders |
 | `cococo init <id>` | Scaffold an integration under `integrations/<short-name>/` |
 | `cococo init <handle> --type app` | Scaffold a custom app under `custom_apps/<handle>/` |
 | `cococo init <handle> --type edge` | Scaffold an edge app under `edge_apps/<handle>/` |
-| `cococo push [folder] [--strict]` | Mirror local → remote (runs lint first) |
+| `cococo push [folder\|--all] [--strict]` | Mirror local → remote (runs lint first). `--all` walks every artifact and stops on first failure |
 | `cococo status [folder]` | Diff local vs remote (read-only) |
-| `cococo lint [folder] [--strict]` | Validate every Lua chunk via the server |
-| `cococo validate [folder]` | Server-validate the remote draft (integrations only) |
-| `cococo publish [folder]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED) |
+| `cococo lint [folder\|--all] [--strict]` | Validate every Lua chunk via the server. `--all` walks every artifact, aggregates findings, exits non-zero if any failed |
+| `cococo validate [folder\|--all]` | Server-validate the remote draft (integrations only). `--all` validates every integration, aggregates results |
+| `cococo publish [folder\|--all]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED). `--all` publishes every artifact, stops on first failure |
 | `cococo deprecate [folder]` | Retire the PUBLISHED definition. Integrations: ACTIVE → DEPRECATED. Edge apps: PUBLISHED → DEPRECATED. Existing installations keep working until upgraded. Custom apps don't apply |
-| `cococo apply` | Apply tenant ops files at the repo root. Mostly additive (upserts what's declared); team `members` lists reconcile within each declared team |
-| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user <email> <app>`, `custom-app-team <team> <app>` |
+| `cococo apply` | Apply tenant ops files at the repo root. Mostly additive; reconciled lists for team `members` and controller `policy`; tokens are create-only with existence check; installations smart-upsert (exact match / upgrade / create) |
+| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user <email> <app>`, `custom-app-team <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>` |
 | `cococo pull <id\|handle> [--type app\|edge] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |

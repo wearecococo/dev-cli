@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { listAllArtifactFolders } from "../project.ts";
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   createDraft,
@@ -39,6 +40,39 @@ export type PushOptions = {
   /** Treat warnings as failures during the pre-push lint pass. */
   strict?: boolean;
 };
+
+/**
+ * Push every artifact folder under `integrations/`, `custom_apps/`,
+ * and `edge_apps/`. Stops on the first failure — push has server-side
+ * effects, so partial-success states are best avoided unless the user
+ * explicitly opts in (we don't currently surface a `--keep-going` for
+ * push because the semantics are subtle: a failed push leaves the
+ * remote draft in an unknown state until the user investigates).
+ */
+export async function runPushAll(
+  opts: PushOptions,
+  overrides: ConfigOverrides,
+): Promise<void> {
+  const folders = listAllArtifactFolders();
+  if (folders.length === 0) {
+    console.log("No artifact folders found under integrations/, custom_apps/, or edge_apps/.");
+    return;
+  }
+  console.log(`Pushing ${folders.length} artifact(s)…`);
+  let succeeded = 0;
+  for (const folder of folders) {
+    try {
+      await runPush(folder, opts, overrides);
+      succeeded++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`\nFailed pushing ${folder}: ${msg}`);
+      console.error(`Stopped after ${succeeded} of ${folders.length} succeeded.`);
+      throw err;
+    }
+  }
+  console.log(`\nPushed ${succeeded} artifact(s).`);
+}
 
 export async function runPush(
   folderArg: string | undefined,

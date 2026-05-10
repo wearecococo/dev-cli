@@ -1,3 +1,4 @@
+import { listAllArtifactFolders } from "../project.ts";
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   createCustomAppVersion,
@@ -12,6 +13,34 @@ import {
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import type { LoadedCustomApp, LoadedEdgeApp } from "../loader.ts";
 import { findDefinition, loadLocal } from "./_shared.ts";
+
+/**
+ * Publish every artifact under `integrations/`, `custom_apps/`,
+ * `edge_apps/`. Stops on first failure — same reasoning as `push --all`.
+ * Note: integrations are skipped if their version is already PUBLISHED
+ * (the per-folder `runPublish` already errors on that, and we propagate).
+ */
+export async function runPublishAll(overrides: ConfigOverrides): Promise<void> {
+  const folders = listAllArtifactFolders();
+  if (folders.length === 0) {
+    console.log("No artifact folders found under integrations/, custom_apps/, or edge_apps/.");
+    return;
+  }
+  console.log(`Publishing ${folders.length} artifact(s)…`);
+  let succeeded = 0;
+  for (const folder of folders) {
+    try {
+      await runPublish(folder, overrides);
+      succeeded++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`\nFailed publishing ${folder}: ${msg}`);
+      console.error(`Stopped after ${succeeded} of ${folders.length} succeeded.`);
+      throw err;
+    }
+  }
+  console.log(`\nPublished ${succeeded} artifact(s).`);
+}
 
 export async function runPublish(
   folderArg: string | undefined,

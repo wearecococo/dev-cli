@@ -4,7 +4,10 @@ import {
   attachCustomAppTeam,
   attachCustomAppUser,
   attachPolicy,
+  createControllerToken,
   createIAMPolicy,
+  getControllerByHandle,
+  getControllerPolicyByController,
   getCustomAppByHandle,
   getDeviceByIdentifier,
   getIAMPolicy,
@@ -12,15 +15,23 @@ import {
   getTeamByName,
   getTeamMembers,
   getUserByEmail,
+  listControllerTokens,
   listCustomAppTeams,
   listCustomAppUsers,
+  listEdgeAppInstallations,
   listUserPolicies,
   removeTeamMember,
+  resolveEdgeAppByHandleAndVersion,
   updateIAMPolicy,
+  upgradeEdgeAppInstallation,
+  upsertController,
+  upsertControllerPolicy,
   upsertDevice,
+  upsertEdgeAppInstallation,
   upsertNetwork,
   upsertTeam,
   upsertUser,
+  type ControllerState,
   type IAMDocument,
   type IAMPolicyState,
   type InboundProtocolConfig,
@@ -33,9 +44,12 @@ import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { loadOps, type LoadedOps } from "../ops.ts";
 import type {
   Binding,
+  Controller,
+  ControllerToken,
   CustomAppTeam,
   CustomAppUser,
   Device,
+  EdgeAppInstallation,
   IAMPolicy,
   InboundProtocol,
   Network,
@@ -61,7 +75,8 @@ export async function runApply(overrides: ConfigOverrides): Promise<void> {
     console.log(
       `No ops files found in ${process.cwd()}. Expected one of: ` +
         `users.ts, iam_policies.ts, bindings.ts, networks.ts, devices.ts, ` +
-        `teams.ts, custom_app_users.ts, custom_app_teams.ts.`,
+        `teams.ts, custom_app_users.ts, custom_app_teams.ts, ` +
+        `controllers.ts, controller_tokens.ts, edge_app_installations.ts.`,
     );
     return;
   }
@@ -75,6 +90,15 @@ export async function runApply(overrides: ConfigOverrides): Promise<void> {
   const teamsByName = await applyTeams(client, ops.teams, usersByEmail, ops);
   await applyCustomAppUsers(client, ops.customAppUsers, usersByEmail, ops);
   await applyCustomAppTeams(client, ops.customAppTeams, teamsByName, ops);
+  const controllersByHandle = await applyControllers(client, ops.controllers, networksByName);
+  await applyControllerTokens(client, ops.controllerTokens, controllersByHandle, ops);
+  await applyEdgeAppInstallations(
+    client,
+    ops.edgeAppInstallations,
+    controllersByHandle,
+    usersByEmail,
+    ops,
+  );
 
   reportSummary(ops);
 }
@@ -567,6 +591,243 @@ async function resolveByKey(
   return out;
 }
 
+/**
+ * Apply controllers + their inline policy. The controller row is
+ * additive (declared rows get upserted). The inline `policy.allowedIoPaths`
+ * and `allowedExecBinaries` lists are reconciled wholesale per the
+ * server's "Idempotent on controllerId, wholesale-replace on both
+ * allowlists" semantics — what's listed is exactly what the bridge gets.
+ *
+ * Network ref resolves the same belt-and-braces way as devices.
+ */
+async function applyControllers(
+  client: GraphQLClient,
+  controllers: Controller[],
+  networksByName: Map<string, NetworkState>,
+): Promise<Map<string, ControllerState>> {
+  const out = new Map<string, ControllerState>();
+  for (const c of controllers) {
+    let networkId: string | undefined;
+    if (c.network !== undefined) {
+      const local = networksByName.get(c.network);
+      if (local) {
+        networkId = local.id;
+      } else {
+        const remote = await getNetworkByName(client, c.network);
+        if (!remote) {
+          throw new Error(
+            `Controller '${c.handle}' references network '${c.network}' that ` +
+              `doesn't exist locally or on the server.`,
+          );
+        }
+        networkId = remote.id;
+      }
+    }
+
+    const existing = await getControllerByHandle(client, c.handle);
+    const result = await upsertController(client, {
+      id: existing?.id,
+      handle: c.handle,
+      networkId,
+      name: c.name,
+      description: c.description,
+      host: c.host,
+      port: c.port,
+      isActive: c.isActive,
+      jmfConfig: c.jmfConfig,
+    });
+    console.log(`  controller ${existing ? "~" : "+"} ${c.handle}`);
+    out.set(c.handle, result);
+
+    if (c.policy !== undefined) {
+      const existingPolicy = await getControllerPolicyByController(client, result.id);
+      const same = existingPolicy &&
+        equalUnorderedString(existingPolicy.allowedIoPaths, c.policy.allowedIoPaths) &&
+        equalUnorderedString(existingPolicy.allowedExecBinaries, c.policy.allowedExecBinaries);
+      if (same) {
+        console.log(`    policy =  io=${c.policy.allowedIoPaths.length} exec=${c.policy.allowedExecBinaries.length}`);
+      } else {
+        await upsertControllerPolicy(client, {
+          controllerId: result.id,
+          allowedIoPaths: c.policy.allowedIoPaths,
+          allowedExecBinaries: c.policy.allowedExecBinaries,
+        });
+        console.log(
+          `    policy ${existingPolicy ? "~" : "+"} io=${c.policy.allowedIoPaths.length} exec=${c.policy.allowedExecBinaries.length}`,
+        );
+      }
+    }
+  }
+  return out;
+}
+
+function equalUnorderedString(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b);
+  for (const x of a) if (!setB.has(x)) return false;
+  return true;
+}
+
+/**
+ * Apply controller tokens. Create-only with an existence check: for
+ * each declared (controller, name) pair, look up an active (non-revoked)
+ * token. If one exists, skip. Otherwise mint a new one and print the
+ * connect bundle to stdout exactly once — the platform never returns
+ * it again, so the user must capture it now (pipe to a secret manager,
+ * paste into the bridge config, etc).
+ */
+async function applyControllerTokens(
+  client: GraphQLClient,
+  tokens: ControllerToken[],
+  controllersByHandle: Map<string, ControllerState>,
+  ops: LoadedOps,
+): Promise<void> {
+  for (const t of tokens) {
+    const controllerId = await resolveControllerId(client, t.controller, controllersByHandle, ops);
+
+    const matches = await listControllerTokens(client, {
+      controllerId,
+      name: t.name,
+      isRevoked: false,
+    });
+    if (matches.length > 0) {
+      console.log(`  token = ${t.controller}/${t.name}`);
+      continue;
+    }
+
+    const created = await createControllerToken(client, {
+      controllerId,
+      name: t.name,
+      description: t.description,
+      expiresAt: t.expiresAt,
+    });
+    console.log(`  token + ${t.controller}/${t.name}`);
+    console.log(`    Connect bundle (save this — never shown again):`);
+    console.log(`    ${created.connectBundle}`);
+  }
+}
+
+/**
+ * Apply edge-app installations. For each declared
+ * `(controller, app-handle, version)`:
+ *
+ *  1. Resolve `(handle, version)` to a specific server-side `edgeAppId`.
+ *     Each edge-app version is its own row; install pins one of them.
+ *  2. Look up an existing install for `(controllerId, edgeAppId)`
+ *     exactly. If found, upsert with id (idempotent variable update).
+ *  3. If no exact match, look for any install on this controller
+ *     pointing at *another* version of the same handle. If found,
+ *     `upgrade` re-pins it without losing per-installation state.
+ *  4. If neither, create a fresh install.
+ */
+async function applyEdgeAppInstallations(
+  client: GraphQLClient,
+  installs: EdgeAppInstallation[],
+  controllersByHandle: Map<string, ControllerState>,
+  usersByEmail: Map<string, UserState>,
+  ops: LoadedOps,
+): Promise<void> {
+  for (const i of installs) {
+    const controllerId = await resolveControllerId(client, i.controller, controllersByHandle, ops);
+    const edgeApp = await resolveEdgeAppByHandleAndVersion(client, i.app, i.version);
+    if (!edgeApp) {
+      throw new Error(
+        `Edge app '${i.app}' v${i.version} doesn't exist on the server. ` +
+          `Push and publish the edge app first.`,
+      );
+    }
+    if (edgeApp.status === "DRAFT") {
+      throw new Error(
+        `Edge app '${i.app}' v${i.version} is DRAFT — installations must pin a ` +
+          `PUBLISHED or DEPRECATED version. Run 'cococo publish ${i.app}' first.`,
+      );
+    }
+
+    let botUserId: string | null | undefined;
+    if (i.botUser !== undefined) {
+      const local = usersByEmail.get(i.botUser);
+      const user = local ?? (await getUserByEmail(client, i.botUser));
+      if (!user) {
+        throw new Error(
+          `Installation ${i.controller}/${i.app} references botUser '${i.botUser}' ` +
+            `that doesn't exist locally or on the server.`,
+        );
+      }
+      botUserId = user.id;
+    }
+
+    const exact = await listEdgeAppInstallations(client, {
+      controllerId,
+      edgeAppId: edgeApp.id,
+    });
+    if (exact.length > 0) {
+      const cur = exact[0]!;
+      await upsertEdgeAppInstallation(client, {
+        id: cur.id,
+        edgeAppId: edgeApp.id,
+        controllerId,
+        botUserId,
+        isActive: i.isActive,
+        variables: i.variables,
+      });
+      console.log(`  install ~ ${i.controller}/${i.app}@v${i.version}`);
+      continue;
+    }
+
+    // No install at this exact version — check for an install of a
+    // different version of the same handle (the upgrade case).
+    const onController = await listEdgeAppInstallations(client, { controllerId });
+    const sameHandle = onController.find((inst) => inst.edgeApp?.handle === i.app);
+    if (sameHandle) {
+      await upgradeEdgeAppInstallation(client, {
+        id: sameHandle.id,
+        toEdgeAppId: edgeApp.id,
+      });
+      // After upgrade, push the latest variables/botUser/isActive via
+      // the same id so the install reflects the declared spec.
+      await upsertEdgeAppInstallation(client, {
+        id: sameHandle.id,
+        edgeAppId: edgeApp.id,
+        controllerId,
+        botUserId,
+        isActive: i.isActive,
+        variables: i.variables,
+      });
+      console.log(
+        `  install ↑ ${i.controller}/${i.app} v${sameHandle.edgeApp?.version} → v${i.version}`,
+      );
+      continue;
+    }
+
+    await upsertEdgeAppInstallation(client, {
+      edgeAppId: edgeApp.id,
+      controllerId,
+      botUserId,
+      isActive: i.isActive,
+      variables: i.variables,
+    });
+    console.log(`  install + ${i.controller}/${i.app}@v${i.version}`);
+  }
+}
+
+async function resolveControllerId(
+  client: GraphQLClient,
+  handle: string,
+  controllersByHandle: Map<string, ControllerState>,
+  ops: LoadedOps,
+): Promise<string> {
+  const local = controllersByHandle.get(handle);
+  if (local) return local.id;
+  const remote = await getControllerByHandle(client, handle);
+  if (!remote) {
+    const hint = ops.files.controllers ? ` declared in ${ops.files.controllers}` : "";
+    throw new Error(
+      `Controller '${handle}' doesn't exist locally${hint} or on the server.`,
+    );
+  }
+  return remote.id;
+}
+
 function reportSummary(ops: LoadedOps): void {
   const parts: string[] = [];
   if (ops.users.length > 0) parts.push(`${ops.users.length} user(s)`);
@@ -577,5 +838,10 @@ function reportSummary(ops: LoadedOps): void {
   if (ops.teams.length > 0) parts.push(`${ops.teams.length} team(s)`);
   if (ops.customAppUsers.length > 0) parts.push(`${ops.customAppUsers.length} app-user(s)`);
   if (ops.customAppTeams.length > 0) parts.push(`${ops.customAppTeams.length} app-team(s)`);
+  if (ops.controllers.length > 0) parts.push(`${ops.controllers.length} controller(s)`);
+  if (ops.controllerTokens.length > 0) parts.push(`${ops.controllerTokens.length} token(s)`);
+  if (ops.edgeAppInstallations.length > 0) {
+    parts.push(`${ops.edgeAppInstallations.length} install(s)`);
+  }
   console.log(`Applied ${parts.join(", ")}.`);
 }

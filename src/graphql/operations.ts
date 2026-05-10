@@ -1794,3 +1794,396 @@ export async function detachCustomAppTeam(
     throw new Error(`detachCustomAppTeam failed: ${summary}`);
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Controllers, controller policies, controller tokens, and edge-app
+// installations. The full chain to actually run an edge app on a
+// controller:
+//
+//   Network ─┐
+//            ▼
+//        Controller ──▶ ControllerPolicy   (allowlists; default-deny without one)
+//             │
+//             ├──▶ ControllerToken         (create-only; secret connect bundle
+//             │                             returned once)
+//             ▼
+//        EdgeAppInstallation               (pins an edge-app version to this
+//                                           controller, with per-install variables)
+// ──────────────────────────────────────────────────────────────────────
+
+export type JMFConfig = {
+  enabled: boolean;
+  path?: string | null;
+  authEnabled?: boolean | null;
+};
+
+export type ControllerState = {
+  id: string;
+  networkId?: string | null;
+  handle: string;
+  name?: string | null;
+  description?: string | null;
+  host?: string | null;
+  port?: number | null;
+  isActive: boolean;
+  jmfConfig?: JMFConfig | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const CONTROLLER_FIELDS = `
+  id networkId handle name description host port isActive createdAt updatedAt
+  jmfConfig { enabled path authEnabled }
+`;
+
+export async function listControllers(
+  client: GraphQLClient,
+  filter?: { handle?: string },
+): Promise<ControllerState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.handle) filterArg.handle = { eq: filter.handle };
+  const query = `
+    query ListControllers($filter: ControllerFilterInput) {
+      listControllers(first: 500, filter: $filter) {
+        edges { node { ${CONTROLLER_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listControllers: { edges: { node: ControllerState }[] };
+  }>(query, { filter: filterArg });
+  return data.listControllers.edges.map((e) => e.node);
+}
+
+export async function getControllerByHandle(
+  client: GraphQLClient,
+  handle: string,
+): Promise<ControllerState | undefined> {
+  const matches = await listControllers(client, { handle });
+  return matches[0];
+}
+
+export async function upsertController(
+  client: GraphQLClient,
+  input: {
+    id?: string;
+    handle: string;
+    networkId?: string;
+    name?: string;
+    description?: string;
+    host?: string;
+    port?: number;
+    isActive?: boolean;
+    jmfConfig?: { enabled: boolean; path?: string; authEnabled?: boolean };
+  },
+): Promise<ControllerState> {
+  const query = `
+    mutation UpsertController($input: UpsertControllerInput!) {
+      upsertController(input: $input) {
+        controller { ${CONTROLLER_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertController: { controller: ControllerState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.upsertController.errors.length > 0) {
+    const summary = data.upsertController.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`upsertController failed: ${summary}`);
+  }
+  if (!data.upsertController.controller) {
+    throw new Error(`upsertController returned no controller and no errors.`);
+  }
+  return data.upsertController.controller;
+}
+
+export async function deleteController(client: GraphQLClient, id: string): Promise<void> {
+  const query = `mutation DeleteController($id: ControllerID!) { deleteController(id: $id) { id } }`;
+  await client.request(query, { id });
+}
+
+export type ControllerPolicyState = {
+  id: string;
+  controllerId: string;
+  allowedIoPaths: string[];
+  allowedExecBinaries: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+const POLICY_FIELDS_CTRL = `id controllerId allowedIoPaths allowedExecBinaries createdAt updatedAt`;
+
+export async function getControllerPolicyByController(
+  client: GraphQLClient,
+  controllerId: string,
+): Promise<ControllerPolicyState | undefined> {
+  const query = `
+    query GetControllerPolicyByController($controllerId: ControllerID!) {
+      getControllerPolicyByController(controllerId: $controllerId) { ${POLICY_FIELDS_CTRL} }
+    }
+  `;
+  const data = await client.request<{
+    getControllerPolicyByController: ControllerPolicyState | null;
+  }>(query, { controllerId });
+  return data.getControllerPolicyByController ?? undefined;
+}
+
+export async function upsertControllerPolicy(
+  client: GraphQLClient,
+  input: { controllerId: string; allowedIoPaths: string[]; allowedExecBinaries: string[] },
+): Promise<ControllerPolicyState> {
+  const query = `
+    mutation UpsertControllerPolicy($input: UpsertControllerPolicyInput!) {
+      upsertControllerPolicy(input: $input) {
+        controllerPolicy { ${POLICY_FIELDS_CTRL} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertControllerPolicy: {
+      controllerPolicy: ControllerPolicyState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input });
+  if (data.upsertControllerPolicy.errors.length > 0) {
+    const summary = data.upsertControllerPolicy.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`upsertControllerPolicy failed: ${summary}`);
+  }
+  if (!data.upsertControllerPolicy.controllerPolicy) {
+    throw new Error(`upsertControllerPolicy returned no policy and no errors.`);
+  }
+  return data.upsertControllerPolicy.controllerPolicy;
+}
+
+export async function deleteControllerPolicy(client: GraphQLClient, id: string): Promise<void> {
+  const query = `
+    mutation DeleteControllerPolicy($id: ControllerPolicyID!) {
+      deleteControllerPolicy(id: $id) { id }
+    }
+  `;
+  await client.request(query, { id });
+}
+
+export type ControllerTokenState = {
+  id: string;
+  controllerId: string;
+  name: string;
+  description?: string | null;
+  expiresAt?: string | null;
+  lastUsedAt?: string | null;
+  isRevoked: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const TOKEN_FIELDS = `
+  id controllerId name description expiresAt lastUsedAt isRevoked createdAt updatedAt
+`;
+
+export async function listControllerTokens(
+  client: GraphQLClient,
+  filter?: { controllerId?: string; name?: string; isRevoked?: boolean },
+): Promise<ControllerTokenState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.controllerId) filterArg.controllerId = { eq: filter.controllerId };
+  if (filter?.name) filterArg.name = { eq: filter.name };
+  if (filter?.isRevoked !== undefined) filterArg.isRevoked = { eq: filter.isRevoked };
+  const query = `
+    query ListControllerTokens($filter: ControllerTokenFilterInput) {
+      listControllerTokens(first: 500, filter: $filter) {
+        edges { node { ${TOKEN_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listControllerTokens: { edges: { node: ControllerTokenState }[] };
+  }>(query, { filter: filterArg });
+  return data.listControllerTokens.edges.map((e) => e.node);
+}
+
+export type CreatedControllerToken = {
+  controllerToken: ControllerTokenState;
+  /** Base64-encoded JSON connect bundle for the bridge. Returned once. */
+  connectBundle: string;
+};
+
+export async function createControllerToken(
+  client: GraphQLClient,
+  input: { controllerId: string; name: string; description?: string; expiresAt?: string },
+): Promise<CreatedControllerToken> {
+  const query = `
+    mutation CreateControllerToken($input: CreateControllerTokenInput!) {
+      createControllerToken(input: $input) {
+        controllerToken { ${TOKEN_FIELDS} }
+        connectBundle
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    createControllerToken: {
+      controllerToken: ControllerTokenState | null;
+      connectBundle: string | null;
+      errors: FieldError[];
+    };
+  }>(query, { input });
+  if (data.createControllerToken.errors.length > 0) {
+    const summary = data.createControllerToken.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`createControllerToken failed: ${summary}`);
+  }
+  if (!data.createControllerToken.controllerToken || !data.createControllerToken.connectBundle) {
+    throw new Error(`createControllerToken returned no token/bundle and no errors.`);
+  }
+  return {
+    controllerToken: data.createControllerToken.controllerToken,
+    connectBundle: data.createControllerToken.connectBundle,
+  };
+}
+
+export async function revokeControllerToken(client: GraphQLClient, id: string): Promise<void> {
+  const query = `
+    mutation RevokeControllerToken($id: ControllerTokenID!) {
+      revokeControllerToken(id: $id) { id }
+    }
+  `;
+  await client.request(query, { id });
+}
+
+export type EdgeAppInstallationState = {
+  id: string;
+  edgeAppId: string;
+  controllerId: string;
+  botUserId?: string | null;
+  isActive: boolean;
+  /** JSON object — the bridge resolves ${config:NAME} refs in the edge app from this. */
+  variables: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  /** Pinned edge app row — populated when selected; lets us recover the handle. */
+  edgeApp?: { id: string; handle: string; version: number } | null;
+};
+
+const INSTALL_FIELDS = `
+  id edgeAppId controllerId botUserId isActive variables createdAt updatedAt
+  edgeApp { id handle version }
+`;
+
+export async function listEdgeAppInstallations(
+  client: GraphQLClient,
+  filter?: { controllerId?: string; edgeAppId?: string },
+): Promise<EdgeAppInstallationState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.controllerId) filterArg.controllerId = { eq: filter.controllerId };
+  if (filter?.edgeAppId) filterArg.edgeAppId = { eq: filter.edgeAppId };
+  const query = `
+    query ListEdgeAppInstallations($filter: EdgeAppInstallationFilterInput) {
+      listEdgeAppInstallations(first: 500, filter: $filter) {
+        edges { node { ${INSTALL_FIELDS} } }
+      }
+    }
+  `;
+  const data = await client.request<{
+    listEdgeAppInstallations: { edges: { node: EdgeAppInstallationState }[] };
+  }>(query, { filter: filterArg });
+  return data.listEdgeAppInstallations.edges.map((e) => e.node);
+}
+
+export async function upsertEdgeAppInstallation(
+  client: GraphQLClient,
+  input: {
+    id?: string;
+    edgeAppId: string;
+    controllerId: string;
+    botUserId?: string | null;
+    isActive?: boolean;
+    variables?: Record<string, unknown>;
+  },
+): Promise<EdgeAppInstallationState> {
+  const query = `
+    mutation UpsertEdgeAppInstallation($input: UpsertEdgeAppInstallationInput!) {
+      upsertEdgeAppInstallation(input: $input) {
+        edgeAppInstallation { ${INSTALL_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upsertEdgeAppInstallation: {
+      edgeAppInstallation: EdgeAppInstallationState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input });
+  if (data.upsertEdgeAppInstallation.errors.length > 0) {
+    const summary = data.upsertEdgeAppInstallation.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`upsertEdgeAppInstallation failed: ${summary}`);
+  }
+  if (!data.upsertEdgeAppInstallation.edgeAppInstallation) {
+    throw new Error(`upsertEdgeAppInstallation returned no installation and no errors.`);
+  }
+  return data.upsertEdgeAppInstallation.edgeAppInstallation;
+}
+
+export async function upgradeEdgeAppInstallation(
+  client: GraphQLClient,
+  input: { id: string; toEdgeAppId: string },
+): Promise<EdgeAppInstallationState> {
+  const query = `
+    mutation UpgradeEdgeAppInstallation($input: UpgradeEdgeAppInstallationInput!) {
+      upgradeEdgeAppInstallation(input: $input) {
+        edgeAppInstallation { ${INSTALL_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upgradeEdgeAppInstallation: {
+      edgeAppInstallation: EdgeAppInstallationState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input });
+  if (data.upgradeEdgeAppInstallation.errors.length > 0) {
+    const summary = data.upgradeEdgeAppInstallation.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`upgradeEdgeAppInstallation failed: ${summary}`);
+  }
+  if (!data.upgradeEdgeAppInstallation.edgeAppInstallation) {
+    throw new Error(`upgradeEdgeAppInstallation returned no installation and no errors.`);
+  }
+  return data.upgradeEdgeAppInstallation.edgeAppInstallation;
+}
+
+export async function deleteEdgeAppInstallation(
+  client: GraphQLClient,
+  id: string,
+): Promise<void> {
+  const query = `
+    mutation DeleteEdgeAppInstallation($id: EdgeAppInstallationID!) {
+      deleteEdgeAppInstallation(id: $id) { id }
+    }
+  `;
+  await client.request(query, { id });
+}
+
+/**
+ * Resolve an edge-app handle + version to a specific `edgeAppId`. The
+ * server stores each version as a distinct row keyed by `id`; the
+ * (handle, version) pair is the natural composite the install pins
+ * against.
+ */
+export async function resolveEdgeAppByHandleAndVersion(
+  client: GraphQLClient,
+  handle: string,
+  version: number,
+): Promise<EdgeAppState | undefined> {
+  const matches = await listEdgeApps(client, { handle });
+  return matches.find((e) => e.version === version);
+}

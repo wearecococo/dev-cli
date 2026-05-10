@@ -5,7 +5,11 @@ import {
   type LuaSeverity,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
-import { resolveIntegrationFolder, walkIntegrationFiles } from "../project.ts";
+import {
+  listAllArtifactFolders,
+  resolveIntegrationFolder,
+  walkIntegrationFiles,
+} from "../project.ts";
 import { loadManifest } from "../loader.ts";
 import { collectLuaChecks, type LuaCheck } from "../lua-checks.ts";
 
@@ -52,6 +56,65 @@ export async function runLint(
   );
 
   if (errorCount > 0 || (opts.strict && warningCount > 0)) {
+    process.exit(1);
+  }
+}
+
+/**
+ * Lint every artifact folder and aggregate the results. Read-only —
+ * no server mutation, so we keep going past failures and print a
+ * final summary. Exits non-zero if any artifact has errors (or
+ * warnings under `--strict`).
+ */
+export async function runLintAll(
+  opts: LintOptions,
+  overrides: ConfigOverrides,
+): Promise<void> {
+  const folders = listAllArtifactFolders();
+  if (folders.length === 0) {
+    console.log("No artifact folders found under integrations/, custom_apps/, or edge_apps/.");
+    return;
+  }
+
+  let totalErrors = 0;
+  let totalWarnings = 0;
+  let failedFolders = 0;
+
+  for (const folder of folders) {
+    let findings: LintFinding[];
+    try {
+      findings = await runLintFindings(folder, opts, overrides);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`${folder}: lint failed (${msg})`);
+      failedFolders++;
+      continue;
+    }
+    const errs = findings.reduce(
+      (n, f) => n + f.diagnostics.filter((d) => d.severity === "ERROR").length,
+      0,
+    );
+    const warns = findings.reduce(
+      (n, f) => n + f.diagnostics.filter((d) => d.severity === "WARNING").length,
+      0,
+    );
+    totalErrors += errs;
+    totalWarnings += warns;
+
+    if (findings.length === 0) {
+      console.log(`${folder}  ✓`);
+    } else {
+      console.log(`${folder}  ${errs} error(s), ${warns} warning(s)`);
+      reportLintFindings(findings);
+    }
+  }
+
+  console.log(
+    `\nSummary: ${folders.length} folder(s), ` +
+      `${totalErrors} error(s), ${totalWarnings} warning(s), ` +
+      `${failedFolders} unprocessable.`,
+  );
+  if (totalErrors > 0 || (opts.strict && totalWarnings > 0) || failedFolders > 0) {
     process.exit(1);
   }
 }

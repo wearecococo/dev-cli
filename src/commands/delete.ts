@@ -1,6 +1,8 @@
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
+  deleteController,
   deleteDevice,
+  deleteEdgeAppInstallation,
   deleteIAMPolicy,
   deleteNetwork,
   deleteTeam,
@@ -8,13 +10,18 @@ import {
   detachCustomAppTeam,
   detachCustomAppUser,
   detachPolicy,
+  getControllerByHandle,
   getCustomAppByHandle,
   getDeviceByIdentifier,
   getIAMPolicy,
   getNetworkByName,
   getTeamByName,
   getUserByEmail,
+  listControllerTokens,
+  listEdgeAppInstallations,
   removeTeamMember,
+  resolveEdgeAppByHandleAndVersion,
+  revokeControllerToken,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 
@@ -27,7 +34,10 @@ export type DeleteKind =
   | "team"
   | "team-member"
   | "custom-app-user"
-  | "custom-app-team";
+  | "custom-app-team"
+  | "controller"
+  | "controller-token"
+  | "edge-app-installation";
 
 /**
  * Remove a tenant-IAM resource from the platform. The flat ops files
@@ -97,9 +107,35 @@ export async function runDelete(
     await deleteAppTeam(client, args[0]!, args[1]!);
     return;
   }
+  if (kind === "controller") {
+    if (args.length !== 1) {
+      throw new Error(`cococo delete controller <handle> — got ${args.length} arg(s).`);
+    }
+    await deleteControllerByHandle(client, args[0]!);
+    return;
+  }
+  if (kind === "controller-token") {
+    if (args.length !== 2) {
+      throw new Error(
+        `cococo delete controller-token <controller-handle> <token-name> — got ${args.length} arg(s).`,
+      );
+    }
+    await revokeTokenByName(client, args[0]!, args[1]!);
+    return;
+  }
+  if (kind === "edge-app-installation") {
+    if (args.length !== 3) {
+      throw new Error(
+        `cococo delete edge-app-installation <controller> <app> <version> — got ${args.length} arg(s).`,
+      );
+    }
+    await deleteInstallation(client, args[0]!, args[1]!, parseInt(args[2]!, 10));
+    return;
+  }
   throw new Error(
     `cococo delete: unknown kind '${kind}'. Use user | policy | binding | network | device | ` +
-      `team | team-member | custom-app-user | custom-app-team.`,
+      `team | team-member | custom-app-user | custom-app-team | controller | controller-token | ` +
+      `edge-app-installation.`,
   );
 }
 
@@ -216,4 +252,65 @@ async function deleteAppTeam(
   await detachCustomAppTeam(client, { customAppId: app.id, teamId: team.id });
   console.log(`Detached team '${teamName}' from custom app '${appHandle}'.`);
   console.log(`  Remember to remove the entry from custom_app_teams.ts to keep apply consistent.`);
+}
+
+async function deleteControllerByHandle(client: GraphQLClient, handle: string): Promise<void> {
+  const controller = await getControllerByHandle(client, handle);
+  if (!controller) {
+    console.log(`No controller found with handle '${handle}'.`);
+    return;
+  }
+  await deleteController(client, controller.id);
+  console.log(`Deleted controller ${handle} (${controller.id}).`);
+  console.log(`  Remember to remove the entry from controllers.ts to keep apply consistent.`);
+}
+
+async function revokeTokenByName(
+  client: GraphQLClient,
+  controllerHandle: string,
+  tokenName: string,
+): Promise<void> {
+  const controller = await getControllerByHandle(client, controllerHandle);
+  if (!controller) throw new Error(`No controller found with handle '${controllerHandle}'.`);
+  const matches = await listControllerTokens(client, {
+    controllerId: controller.id,
+    name: tokenName,
+    isRevoked: false,
+  });
+  if (matches.length === 0) {
+    console.log(`No active token '${tokenName}' on controller '${controllerHandle}'.`);
+    return;
+  }
+  await revokeControllerToken(client, matches[0]!.id);
+  console.log(`Revoked token '${tokenName}' on controller '${controllerHandle}'.`);
+  console.log(`  Remember to remove the entry from controller_tokens.ts to keep apply consistent.`);
+}
+
+async function deleteInstallation(
+  client: GraphQLClient,
+  controllerHandle: string,
+  appHandle: string,
+  version: number,
+): Promise<void> {
+  const controller = await getControllerByHandle(client, controllerHandle);
+  if (!controller) throw new Error(`No controller found with handle '${controllerHandle}'.`);
+  const edgeApp = await resolveEdgeAppByHandleAndVersion(client, appHandle, version);
+  if (!edgeApp) {
+    throw new Error(`No edge app '${appHandle}' v${version} on the server.`);
+  }
+  const installs = await listEdgeAppInstallations(client, {
+    controllerId: controller.id,
+    edgeAppId: edgeApp.id,
+  });
+  if (installs.length === 0) {
+    console.log(
+      `No installation of '${appHandle}' v${version} on controller '${controllerHandle}'.`,
+    );
+    return;
+  }
+  await deleteEdgeAppInstallation(client, installs[0]!.id);
+  console.log(`Deleted installation ${controllerHandle}/${appHandle}@v${version}.`);
+  console.log(
+    `  Remember to remove the entry from edge_app_installations.ts to keep apply consistent.`,
+  );
 }

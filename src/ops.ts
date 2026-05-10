@@ -3,9 +3,12 @@ import { resolve } from "node:path";
 import {
   manifestKind,
   type Binding,
+  type Controller,
+  type ControllerToken,
   type CustomAppTeam,
   type CustomAppUser,
   type Device,
+  type EdgeAppInstallation,
   type IAMPolicy,
   type Network,
   type Team,
@@ -20,6 +23,9 @@ export const DEVICES_FILENAME = "devices.ts";
 export const TEAMS_FILENAME = "teams.ts";
 export const CUSTOM_APP_USERS_FILENAME = "custom_app_users.ts";
 export const CUSTOM_APP_TEAMS_FILENAME = "custom_app_teams.ts";
+export const CONTROLLERS_FILENAME = "controllers.ts";
+export const CONTROLLER_TOKENS_FILENAME = "controller_tokens.ts";
+export const EDGE_APP_INSTALLATIONS_FILENAME = "edge_app_installations.ts";
 
 export type LoadedOps = {
   /** Absolute paths to the files that were loaded. */
@@ -32,6 +38,9 @@ export type LoadedOps = {
     teams?: string;
     customAppUsers?: string;
     customAppTeams?: string;
+    controllers?: string;
+    controllerTokens?: string;
+    edgeAppInstallations?: string;
   };
   users: User[];
   policies: IAMPolicy[];
@@ -41,6 +50,9 @@ export type LoadedOps = {
   teams: Team[];
   customAppUsers: CustomAppUser[];
   customAppTeams: CustomAppTeam[];
+  controllers: Controller[];
+  controllerTokens: ControllerToken[];
+  edgeAppInstallations: EdgeAppInstallation[];
 };
 
 /**
@@ -64,6 +76,9 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
   const teamsPath = resolve(repoRoot, TEAMS_FILENAME);
   const customAppUsersPath = resolve(repoRoot, CUSTOM_APP_USERS_FILENAME);
   const customAppTeamsPath = resolve(repoRoot, CUSTOM_APP_TEAMS_FILENAME);
+  const controllersPath = resolve(repoRoot, CONTROLLERS_FILENAME);
+  const controllerTokensPath = resolve(repoRoot, CONTROLLER_TOKENS_FILENAME);
+  const edgeAppInstallationsPath = resolve(repoRoot, EDGE_APP_INSTALLATIONS_FILENAME);
 
   const out: LoadedOps = {
     files: {},
@@ -75,6 +90,9 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     teams: [],
     customAppUsers: [],
     customAppTeams: [],
+    controllers: [],
+    controllerTokens: [],
+    edgeAppInstallations: [],
   };
 
   if (existsSync(usersPath)) {
@@ -117,6 +135,26 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     );
     out.files.customAppTeams = customAppTeamsPath;
   }
+  if (existsSync(controllersPath)) {
+    out.controllers = await loadList(controllersPath, "controllers", "controllers");
+    out.files.controllers = controllersPath;
+  }
+  if (existsSync(controllerTokensPath)) {
+    out.controllerTokens = await loadList(
+      controllerTokensPath,
+      "controller_tokens",
+      "tokens",
+    );
+    out.files.controllerTokens = controllerTokensPath;
+  }
+  if (existsSync(edgeAppInstallationsPath)) {
+    out.edgeAppInstallations = await loadList(
+      edgeAppInstallationsPath,
+      "edge_app_installations",
+      "installations",
+    );
+    out.files.edgeAppInstallations = edgeAppInstallationsPath;
+  }
 
   validateNoDuplicates(out);
   return out;
@@ -130,8 +168,20 @@ type OpsKind =
   | "devices"
   | "teams"
   | "custom_app_users"
-  | "custom_app_teams";
-type OpsField = "users" | "policies" | "bindings" | "networks" | "devices" | "teams";
+  | "custom_app_teams"
+  | "controllers"
+  | "controller_tokens"
+  | "edge_app_installations";
+type OpsField =
+  | "users"
+  | "policies"
+  | "bindings"
+  | "networks"
+  | "devices"
+  | "teams"
+  | "controllers"
+  | "tokens"
+  | "installations";
 
 async function loadList<T>(
   absPath: string,
@@ -168,7 +218,10 @@ function expectedKindHelper(kind: OpsKind): string {
   if (kind === "devices") return "Devices";
   if (kind === "teams") return "Teams";
   if (kind === "custom_app_users") return "CustomAppUsers";
-  return "CustomAppTeams";
+  if (kind === "custom_app_teams") return "CustomAppTeams";
+  if (kind === "controllers") return "Controllers";
+  if (kind === "controller_tokens") return "ControllerTokens";
+  return "EdgeAppInstallations";
 }
 
 function validateNoDuplicates(ops: LoadedOps): void {
@@ -260,5 +313,36 @@ function validateNoDuplicates(ops: LoadedOps): void {
       );
     }
     seenAppTeams.add(key);
+  }
+  const seenControllers = new Set<string>();
+  for (const c of ops.controllers) {
+    if (seenControllers.has(c.handle)) {
+      throw new Error(
+        `Duplicate controller handle '${c.handle}' in controllers.ts. Handle is the natural key.`,
+      );
+    }
+    seenControllers.add(c.handle);
+  }
+  const seenTokens = new Set<string>();
+  for (const t of ops.controllerTokens) {
+    const key = `${t.controller}|${t.name}`;
+    if (seenTokens.has(key)) {
+      throw new Error(
+        `Duplicate controller token ${t.controller}/${t.name} in controller_tokens.ts. ` +
+          `(controller, name) is the natural key.`,
+      );
+    }
+    seenTokens.add(key);
+  }
+  const seenInstalls = new Set<string>();
+  for (const i of ops.edgeAppInstallations) {
+    const key = `${i.controller}|${i.app}`;
+    if (seenInstalls.has(key)) {
+      throw new Error(
+        `Duplicate edge-app installation ${i.app} on ${i.controller} in edge_app_installations.ts. ` +
+          `Only one version of an edge-app handle can be installed per controller.`,
+      );
+    }
+    seenInstalls.add(key);
   }
 }

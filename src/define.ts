@@ -231,7 +231,10 @@ export type ManifestKind =
   | "devices"
   | "teams"
   | "custom_app_users"
-  | "custom_app_teams";
+  | "custom_app_teams"
+  | "controllers"
+  | "controller_tokens"
+  | "edge_app_installations";
 
 export type Tagged<T, K extends ManifestKind> = T & {
   readonly [KIND_TAG]: K;
@@ -250,7 +253,10 @@ export function manifestKind(value: unknown): ManifestKind | undefined {
     k === "devices" ||
     k === "teams" ||
     k === "custom_app_users" ||
-    k === "custom_app_teams"
+    k === "custom_app_teams" ||
+    k === "controllers" ||
+    k === "controller_tokens" ||
+    k === "edge_app_installations"
     ? k
     : undefined;
 }
@@ -818,6 +824,109 @@ export function defineCustomAppTeams(
   bindings: CustomAppTeam[],
 ): Tagged<{ bindings: CustomAppTeam[] }, "custom_app_teams"> {
   return Object.assign({}, { bindings }, { [KIND_TAG]: "custom_app_teams" as const });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Controllers, tokens, and edge-app installations. The full chain to
+// run an edge app on a controller:
+//
+//   controllers.ts                  defines controllers + inline policy
+//   controller_tokens.ts            mints connect bundles (create-only)
+//   edge_app_installations.ts       pins (controller, edge-app, version)
+//
+// Inline `policy` on a controller follows the same "declared list = the
+// canonical set" rule as team `members` — declared policy fields are
+// the exact allowlist on the server. Tokens are create-only with an
+// existence check; the connect bundle is printed once on creation.
+// Installations resolve (controller-handle, app-handle, version) to
+// concrete server IDs and either upsert, upgrade, or no-op based on
+// what's already on the controller.
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-controller filesystem + exec allowlists. Empty lists = deny all
+ * (the bridge default-denies on first boot until a policy is pushed).
+ */
+export type ControllerPolicySpec = {
+  allowedIoPaths: string[];
+  allowedExecBinaries: string[];
+};
+
+export type Controller = {
+  /** Natural key — pushed as the controller's handle. Lowercase alphanumeric/underscore/hyphen. */
+  handle: string;
+  /** Network reference by `name` (matches `Network.name`). Optional. */
+  network?: string;
+  name?: string;
+  description?: string;
+  host?: string;
+  port?: number;
+  isActive?: boolean;
+  jmfConfig?: { enabled: boolean; path?: string; authEnabled?: boolean };
+  /**
+   * Inline IO/exec allowlists. Declared lists are the *canonical* set
+   * for this controller — apply replaces both lists wholesale. Omit
+   * to leave the policy untouched (or to inherit the default-deny on
+   * first push).
+   */
+  policy?: ControllerPolicySpec;
+};
+
+/**
+ * Authentication bundle for a single controller. The natural key is
+ * `(controller, name)`. Apply is create-only with an existence check:
+ * if a non-revoked token with this name already exists for the
+ * controller, apply skips it. Otherwise it mints a new one and prints
+ * the connect bundle once — copy that into the bridge configuration
+ * before the next apply, since it's never returned again.
+ */
+export type ControllerToken = {
+  controller: string;
+  name: string;
+  description?: string;
+  /** ISO8601. Optional — omit for non-expiring tokens. */
+  expiresAt?: string;
+};
+
+/**
+ * A specific edge-app version pinned to a specific controller. Refs
+ * the controller by `handle`, the edge app by `app` (handle) +
+ * `version`, and (optionally) a bot user by email. `variables` matches
+ * the edge app's `configSchema` and resolves `${config:...}` template
+ * strings inside the edge app's brokers/endpoints at runtime on the
+ * controller.
+ */
+export type EdgeAppInstallation = {
+  controller: string;
+  app: string;
+  /** Specific PUBLISHED version of the edge app to pin. */
+  version: number;
+  /** Email of a `BOT` user; cloud-side IAM principal for `bridge.graphql` calls. */
+  botUser?: string;
+  isActive?: boolean;
+  variables?: Record<string, unknown>;
+};
+
+export function defineControllers(
+  controllers: Controller[],
+): Tagged<{ controllers: Controller[] }, "controllers"> {
+  return Object.assign({}, { controllers }, { [KIND_TAG]: "controllers" as const });
+}
+
+export function defineControllerTokens(
+  tokens: ControllerToken[],
+): Tagged<{ tokens: ControllerToken[] }, "controller_tokens"> {
+  return Object.assign({}, { tokens }, { [KIND_TAG]: "controller_tokens" as const });
+}
+
+export function defineEdgeAppInstallations(
+  installations: EdgeAppInstallation[],
+): Tagged<{ installations: EdgeAppInstallation[] }, "edge_app_installations"> {
+  return Object.assign(
+    {},
+    { installations },
+    { [KIND_TAG]: "edge_app_installations" as const },
+  );
 }
 
 // ──────────────────────────────────────────────────────────────────────

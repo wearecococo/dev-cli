@@ -55,6 +55,33 @@ export function resolveIntegrationFolder(arg: string | undefined): IntegrationFo
   );
 }
 
+/**
+ * Enumerate every artifact folder under `integrations/`, `custom_apps/`,
+ * and `edge_apps/` at the repo root. Each entry is a folder that has a
+ * `manifest.ts` or `manifest.yaml`. Returned in deterministic order
+ * (kind first, then alphabetical within kind) so iteration is
+ * reproducible.
+ */
+export function listAllArtifactFolders(repoRoot?: string): string[] {
+  const root = repoRoot ?? process.cwd();
+  const out: string[] = [];
+  for (const dir of [INTEGRATIONS_DIR, CUSTOM_APPS_DIR, EDGE_APPS_DIR]) {
+    const abs = resolve(root, dir);
+    if (!existsSync(abs)) continue;
+    const entries = readdirSync(abs).sort();
+    for (const e of entries) {
+      const full = resolve(abs, e);
+      try {
+        if (!statSync(full).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      if (hasManifest(full)) out.push(full);
+    }
+  }
+  return out;
+}
+
 export function makeFolder(absPath: string): IntegrationFolder {
   return {
     path: absPath,
