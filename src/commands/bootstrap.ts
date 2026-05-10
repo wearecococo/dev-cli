@@ -88,12 +88,12 @@ export async function runBootstrap(
     console.log("  1. bun install");
     console.log("  2. Review the dumped ops files; replace any ${config:...} placeholders");
     console.log("  3. bunx cococo setup-mcp claude   # optional: register MCP for Claude Code");
-    console.log("  4. bunx cococo init <handle> --type integration|app|edge   # scaffold an artifact");
+    console.log("  4. bunx cococo init <handle> --type integration|app|edge|workflow   # scaffold an artifact");
   } else {
     console.log("  1. cp .env.example .env  # then fill in COCOCO_ENDPOINT and COCOCO_TOKEN");
     console.log("  2. bun install");
     console.log("  3. bunx cococo setup-mcp claude   # optional: register MCP for Claude Code");
-    console.log("  4. bunx cococo init <handle> --type integration|app|edge   # scaffold an artifact");
+    console.log("  4. bunx cococo init <handle> --type integration|app|edge|workflow   # scaffold an artifact");
   }
 }
 

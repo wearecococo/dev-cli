@@ -3,7 +3,7 @@
 Manage your cococo tenant from a git repo. Declarative tenant config —
 **users, IAM policies, teams, networks, devices, controllers, edge-app
 installations** — alongside the full lifecycle of your platform
-extensions — **integrations, custom apps, edge apps**. One CLI, one
+extensions — **integrations, custom apps, edge apps, workflows**. One CLI, one
 repo, one `apply` loop.
 
 If you've used Terraform, Pulumi, or `kubectl apply` for tenant
@@ -29,6 +29,7 @@ on your tenant.
   - [Authoring an integration](#authoring-an-integration)
   - [Authoring a custom app](#authoring-a-custom-app)
   - [Authoring an edge app](#authoring-an-edge-app)
+  - [Authoring a workflow](#authoring-a-workflow)
 - [Daily workflow](#daily-workflow)
 - [Migrating v1 integrations](#migrating-v1-integrations)
 - [Reference](#reference)
@@ -63,6 +64,7 @@ released with `cococo publish`:
 | `integrations/<name>/` | Background workers — timers, subscriptions, lifecycle hooks, helper libraries |
 | `custom_apps/<handle>/` | User-facing pages, dashboards, kiosks (Vue + JS + optional Lua RPC) |
 | `edge_apps/<handle>/` | Apps that run on a controller — handlers, libraries, MQTT/OPC UA/SNMP/Modbus/HTTP I/O |
+| `workflows/<handle>/` | Visual node-and-edge workflows — declarative DAGs with scheduled / event / webhook / device-MQTT / edge-app triggers |
 
 You don't have to use both halves. A print-shop ops team that just
 wants users + controllers + edge-app installs uses only the tenant-config
@@ -1050,6 +1052,97 @@ secrets stay on the controller side.
 
 See the platform docs for the full per-protocol field reference.
 
+### Authoring a workflow
+
+Workflows are declarative node-and-edge DAGs that run in the cloud.
+Unlike integrations, you don't write the per-step code — each node is a
+typed step (HTTP call, Lua transform, branch, delay, etc.) configured
+through its `config` object, and the platform's per-node JSON Schema is
+the source of truth for what's valid.
+
+A workflow has a mutable row plus immutable version snapshots: `push`
+creates a new version, `publish` flips the active pointer to the latest
+version. Triggers (cron, event, webhook, device MQTT, edge-app event)
+live on the workflow row and reconcile by `(workflow, name)`.
+
+```sh
+bunx cococo init nightly-rollup --type workflow
+```
+
+Scaffolds:
+
+```
+workflows/nightly-rollup/
+└── manifest.ts
+```
+
+The manifest is TypeScript:
+
+```ts
+import { defineWorkflow, luaFile } from "@wearecococo/dev-cli/define";
+
+export default defineWorkflow({
+  handle: "nightly-rollup",
+  displayName: "Nightly Rollup",
+  description: "Aggregates daily metrics overnight.",
+  isActive: true,
+
+  variables: [
+    { name: "lookbackDays", type: "number", defaultValue: 7 },
+  ],
+
+  // Nodes: stable id + type + opaque config. Server-validated against
+  // the per-node JSON Schema. Code-bearing slots (e.g. a lua_script
+  // node's `source`) accept luaFile() refs and are inlined on push.
+  nodes: [
+    { id: "start", name: "Start", type: "trigger", config: {} },
+    {
+      id: "transform",
+      name: "Transform",
+      type: "lua_script",
+      config: { source: luaFile("./scripts/transform.lua") },
+    },
+  ],
+  edges: [
+    { id: "e1", from: "start", to: "transform" },
+  ],
+
+  // Triggers — discriminated on `kind`:
+  //   { kind: "scheduled",   cronExpression, overlapPolicy, timezone? }
+  //   { kind: "event",       topic, filter?, dataQuery? }
+  //   { kind: "webhook",     path, method, authRequired }
+  //   { kind: "deviceMqtt",  topic, deviceId?, filter? }
+  //   { kind: "edgeAppEvent", topic?, controllerId?, edgeAppHandle? }
+  triggers: [
+    {
+      name: "nightly",
+      config: {
+        kind: "scheduled",
+        cronExpression: "0 2 * * *",
+        overlapPolicy: "SKIP",
+        timezone: "UTC",
+      },
+    },
+  ],
+});
+```
+
+`cococo lint nightly-rollup` server-validates the definition against
+the platform's JSON Schema before pushing. `cococo push nightly-rollup`
+runs the same validation, creates or updates the workflow row, snapshots
+a new version, and reconciles triggers. `cococo publish nightly-rollup`
+flips the active version pointer to the latest snapshot.
+
+`cococo pull nightly-rollup --type workflow` materialises the active
+version + triggers from the server back into a local manifest. Removed
+locally? `cococo delete workflow nightly-rollup` drops the row on the
+server.
+
+> **Phase 1 typing.** Node `config` is `unknown` from the CLI's
+> perspective — TS doesn't know which fields each node type accepts;
+> the server enforces per-node JSON Schemas. A future phase will codegen
+> typed configs from those schemas.
+
 ## Daily workflow
 
 Once the workspace is set up, day-to-day work looks like:
@@ -1208,6 +1301,7 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 | `cococo init <id>` | Scaffold an integration under `integrations/<short-name>/` |
 | `cococo init <handle> --type app` | Scaffold a custom app under `custom_apps/<handle>/` |
 | `cococo init <handle> --type edge` | Scaffold an edge app under `edge_apps/<handle>/` |
+| `cococo init <handle> --type workflow` | Scaffold a workflow under `workflows/<handle>/` |
 | `cococo push [folder\|--all] [--strict]` | Mirror local → remote (runs lint first). `--all` walks every artifact and stops on first failure |
 | `cococo status [folder]` | Diff local vs remote (read-only) |
 | `cococo lint [folder\|--all] [--strict]` | Validate every Lua chunk via the server. `--all` walks every artifact, aggregates findings, exits non-zero if any failed |
@@ -1215,8 +1309,8 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 | `cococo publish [folder\|--all]` | Integrations: DRAFT → ACTIVE. Custom apps: snapshot working copy + publish. Edge apps: DRAFT → PUBLISHED (auto-deprecates prior PUBLISHED). `--all` publishes every artifact, stops on first failure |
 | `cococo deprecate [folder]` | Retire the PUBLISHED definition. Integrations: ACTIVE → DEPRECATED. Edge apps: PUBLISHED → DEPRECATED. Existing installations keep working until upgraded. Custom apps don't apply |
 | `cococo apply` | Apply tenant ops files at the repo root. Mostly additive; reconciled lists for team `members` and controller `policy`; tokens are create-only with existence check; installations smart-upsert (exact match / upgrade / create) |
-| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `iam-policy-binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user-binding <email> <app>`, `custom-app-team-binding <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>` |
-| `cococo pull <id\|handle> [--type app\|edge] [-f]` | Download remote into a local folder |
+| `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `iam-policy-binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user-binding <email> <app>`, `custom-app-team-binding <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>`, `workflow <handle>` |
+| `cococo pull <id\|handle> [--type app\|edge\|workflow] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
 | `cococo migrate [folder]` | Fork a v1 YAML integration to a v2 TS sibling (uses Claude Code) |
 | `cococo setup-mcp claude` | Register the cococo MCP endpoint with Claude Code |

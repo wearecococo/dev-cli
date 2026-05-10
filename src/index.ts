@@ -107,11 +107,12 @@ program
 program
   .command("init <idOrHandle>")
   .description(
-    "Scaffold a new integration or custom app under integrations/<short-name>/ or " +
-      "custom_apps/<handle>/. Defaults to a TypeScript manifest at engineVersion 2.",
+    "Scaffold a new integration, custom app, edge app, or workflow under " +
+      "integrations/<short-name>/, custom_apps/<handle>/, edge_apps/<handle>/, " +
+      "or workflows/<handle>/. Defaults to a TypeScript manifest at engineVersion 2.",
   )
   .option(
-    "-t, --type <integration|app|edge>",
+    "-t, --type <integration|app|edge|workflow>",
     "Kind of thing to scaffold",
     "integration",
   )
@@ -163,9 +164,9 @@ function parseFormat(raw: string): "ts" | "yaml" {
   throw new Error(`--format must be 'ts' or 'yaml' (got ${raw}).`);
 }
 
-function parseType(raw: string): "integration" | "app" | "edge" {
-  if (raw === "integration" || raw === "app" || raw === "edge") return raw;
-  throw new Error(`--type must be 'integration', 'app', or 'edge' (got ${raw}).`);
+function parseType(raw: string): "integration" | "app" | "edge" | "workflow" {
+  if (raw === "integration" || raw === "app" || raw === "edge" || raw === "workflow") return raw;
+  throw new Error(`--type must be 'integration', 'app', 'edge', or 'workflow' (got ${raw}).`);
 }
 
 function parseAppKind(raw: string): "PAGE" | "DASHBOARD" | "KIOSK" | "JOB_VIEW" {
@@ -284,7 +285,8 @@ program
       "team-member (<team> <email>), custom-app-user-binding (<email> <app>), " +
       "custom-app-team-binding (<team> <app>), controller (<handle>), " +
       "controller-token (<controller> <name>), " +
-      "edge-app-installation (<controller> <app> <version>). " +
+      "edge-app-installation (<controller> <app> <version>), " +
+      "workflow (<handle>). " +
       "Local ops files are NOT edited — remove the entry yourself to " +
       "keep the next apply consistent.",
   )
@@ -302,6 +304,7 @@ program
       "controller",
       "controller-token",
       "edge-app-installation",
+      "workflow",
     ] as const;
     if (!allowed.includes(kind as (typeof allowed)[number])) {
       throw new Error(
@@ -325,11 +328,12 @@ program
 program
   .command("pull <idOrHandle>")
   .description(
-    "Materialize a remote integration draft into integrations/<short-name>/, " +
-      "or a remote custom app's working copy into custom_apps/<handle>/.",
+    "Materialize a remote integration draft, custom app, edge app, or workflow " +
+      "into integrations/<short-name>/, custom_apps/<handle>/, edge_apps/<handle>/, " +
+      "or workflows/<handle>/.",
   )
   .option(
-    "-t, --type <integration|app|edge>",
+    "-t, --type <integration|app|edge|workflow>",
     "Kind of thing to pull",
     "integration",
   )

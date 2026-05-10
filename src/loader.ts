@@ -11,6 +11,7 @@ import {
   isLuaFileMarker,
   luaFile,
   manifestKind,
+  userEmail,
   type CustomAppKind,
   type CustomAppV2,
   type EdgeAppLogLevel,
@@ -18,6 +19,8 @@ import {
   type IntegrationDefinition,
   type IntegrationV2,
   type ManifestKind,
+  type Workflow,
+  type WorkflowTriggerSpec,
 } from "./define.ts";
 import type {
   EdgeAppExecCommand,
@@ -29,6 +32,7 @@ import type {
   EdgeAppOPCUAEndpoint,
   EdgeAppSNMPDevice,
   EdgeAppTrigger,
+  WorkflowDefinitionWire,
 } from "./graphql/operations.ts";
 
 export const MANIFEST_TS_FILENAME = "manifest.ts";
@@ -68,7 +72,11 @@ export type ManifestSourcePath = string;
  * `manifestKind()` tag stamped onto the result of `defineIntegration` /
  * `defineCustomApp`.
  */
-export type LoadedManifest = LoadedIntegration | LoadedCustomApp | LoadedEdgeApp;
+export type LoadedManifest =
+  | LoadedIntegration
+  | LoadedCustomApp
+  | LoadedEdgeApp
+  | LoadedWorkflow;
 
 export type LoadedIntegration = {
   kind: "integration";
@@ -163,6 +171,42 @@ export type EdgeAppWire = {
   is_active?: boolean;
 };
 
+export type LoadedWorkflow = {
+  kind: "workflow";
+  workflow: WorkflowWire;
+  format: "ts";
+  /** Files referenced via `luaFile()` inside node configs. */
+  consumed: Set<string>;
+  /**
+   * Provenance of every Lua chunk that came from a node-config
+   * `luaFile()` ref. Keys look like `nodes.<id>.config.<json-pointer>`
+   * (e.g. `nodes.calc.config.script`) so lint can address diagnostics
+   * back to the originating field.
+   */
+  manifestSourceOrigins: Map<string, LuaSourceOrigin>;
+};
+
+/**
+ * Resolved workflow shape ready for the wire. `name` is the platform's
+ * workflow name (we set it to the local `handle` if `displayName` isn't
+ * provided). `definition` matches `WorkflowDefinitionInput`. Triggers
+ * are kept separate — push reconciles them after the workflow row +
+ * version snapshot land on the server.
+ */
+export type WorkflowWire = {
+  /** Local handle — used as folder name and as the `name` natural key. */
+  handle: string;
+  /** Display name pushed to the platform's `name` column. */
+  name: string;
+  description?: string;
+  is_active?: boolean;
+  /** Resolved bot user email; push pass swaps this for a userId. */
+  bot_user_email?: string;
+  default_node_timeout_seconds?: number;
+  definition: WorkflowDefinitionWire;
+  triggers: WorkflowTriggerSpec[];
+};
+
 export async function loadManifest(folderPath: string): Promise<LoadedManifest> {
   const tsPath = resolve(folderPath, MANIFEST_TS_FILENAME);
   const yamlPath = resolve(folderPath, MANIFEST_FILENAME);
@@ -229,6 +273,17 @@ export function expectEdge(loaded: LoadedManifest): LoadedEdgeApp {
   return loaded;
 }
 
+/**
+ * Narrow `LoadedManifest` to a workflow, throwing otherwise. Used by
+ * workflow-specific commands.
+ */
+export function expectWorkflow(loaded: LoadedManifest): LoadedWorkflow {
+  if (loaded.kind !== "workflow") {
+    throw new Error(`Expected a workflow manifest at this path; got ${loaded.kind}.`);
+  }
+  return loaded;
+}
+
 async function loadTsManifest(absPath: string): Promise<LoadedManifest> {
   const mod = await importTs(absPath);
   const spec = (mod as { default?: unknown }).default;
@@ -240,6 +295,7 @@ async function loadTsManifest(absPath: string): Promise<LoadedManifest> {
   const kind = manifestKind(spec) as ManifestKind | undefined;
   if (kind === "app") return loadTsCustomApp(spec as CustomAppV2, absPath);
   if (kind === "edge") return loadTsEdgeApp(spec as EdgeAppV2, absPath);
+  if (kind === "workflow") return loadTsWorkflow(spec as Workflow, absPath);
   // Treat untagged exports as integrations for backwards compatibility
   // with hand-authored manifests, and matching the historical behaviour
   // before the kind tag existed.
@@ -475,6 +531,110 @@ function loadTsEdgeApp(spec: EdgeAppV2, absPath: string): LoadedManifest {
   if (httpRoutes.length > 0) app.http_routes = httpRoutes;
 
   return { kind: "edge", app, format: "ts", consumed, manifestSourceOrigins: origins };
+}
+
+/**
+ * Resolve a workflow spec into a wire-ready `LoadedWorkflow`. Walks
+ * each node's `config` for `LuaFileMarker` sentinels and inlines them
+ * (recording provenance for the lint pipeline). Other config values
+ * pass through verbatim — the platform's per-node JSON Schema is the
+ * source of truth for shape; we don't validate locally in Phase 1.
+ *
+ * Variable `defaultValue` and node `config` are JSON-stringified at
+ * the wire boundary because the platform stores them opaquely.
+ */
+function loadTsWorkflow(spec: Workflow, absPath: string): LoadedManifest {
+  const manifestDir = dirname(absPath);
+  const consumed = new Set<string>();
+  const origins = new Map<string, LuaSourceOrigin>();
+
+  const wireNodes = spec.nodes.map((n) => {
+    const inlinedConfig =
+      n.config !== undefined && n.config !== null
+        ? inlineLuaFiles(n.config, manifestDir, consumed, origins, `nodes.${n.id}.config`)
+        : undefined;
+    return {
+      id: n.id,
+      name: n.name,
+      type: n.type,
+      config: inlinedConfig === undefined ? undefined : JSON.stringify(inlinedConfig),
+      position: n.position ?? undefined,
+    };
+  });
+
+  const wireEdges = spec.edges.map((e) => ({
+    id: e.id,
+    fromNodeId: e.from,
+    toNodeId: e.to,
+    condition: e.condition,
+  }));
+
+  const wireVariables = (spec.variables ?? []).map((v) => ({
+    name: v.name,
+    type: v.type,
+    defaultValue:
+      v.defaultValue === undefined ? undefined : JSON.stringify(v.defaultValue),
+    description: v.description,
+  }));
+
+  const definition: WorkflowDefinitionWire = {
+    nodes: wireNodes,
+    edges: wireEdges,
+    variables: wireVariables,
+  };
+
+  const workflow: WorkflowWire = {
+    handle: spec.handle,
+    name: spec.displayName ?? spec.handle,
+    description: spec.description,
+    is_active: spec.isActive,
+    bot_user_email:
+      spec.botUser !== undefined ? userEmail(spec.botUser) : undefined,
+    default_node_timeout_seconds: spec.defaultNodeTimeoutSeconds,
+    definition,
+    triggers: spec.triggers ?? [],
+  };
+
+  return { kind: "workflow", workflow, format: "ts", consumed, manifestSourceOrigins: origins };
+}
+
+/**
+ * Walk a node-config object and replace any `LuaFileMarker` leaves
+ * with the file's content. Records provenance under a JSON-pointer-ish
+ * key (`nodes.<id>.config.<a>.<b>...`) so lint can address back to the
+ * file. Pure for non-marker leaves.
+ */
+function inlineLuaFiles(
+  value: unknown,
+  manifestDir: string,
+  consumed: Set<string>,
+  origins: Map<string, LuaSourceOrigin>,
+  pathSoFar: string,
+): unknown {
+  if (isLuaFileMarker(value)) {
+    const abs = absoluteFor(value.path, manifestDir);
+    const content = readSourceFile(abs, `luaFile("${value.path}")`);
+    consumed.add(abs);
+    origins.set(pathSoFar, { kind: "file", absPath: abs });
+    return content;
+  }
+  if (isFileMarker(value)) {
+    const abs = absoluteFor(value.path, manifestDir);
+    const content = readSourceFile(abs, `file("${value.path}")`);
+    consumed.add(abs);
+    return content;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v, i) => inlineLuaFiles(v, manifestDir, consumed, origins, `${pathSoFar}.${i}`));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = inlineLuaFiles(v, manifestDir, consumed, origins, `${pathSoFar}.${k}`);
+    }
+    return out;
+  }
+  return value;
 }
 
 /**

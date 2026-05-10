@@ -38,6 +38,12 @@ export function collectLuaChecks(args: {
 }): LuaCheck[] {
   if (args.loaded.kind === "app") return collectAppLuaChecks(args);
   if (args.loaded.kind === "edge") return collectEdgeLuaChecks(args);
+  // Workflows: skip Lua checks in Phase 1 — node configs are
+  // server-validated as a whole via validateWorkflow, and we don't
+  // yet know which node types contain Lua. The lint command
+  // dispatches to a workflow-specific path that calls
+  // validateWorkflow directly.
+  if (args.loaded.kind === "workflow") return [];
   return collectIntegrationLuaChecks(args);
 }
 

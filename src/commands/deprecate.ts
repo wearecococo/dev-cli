@@ -15,6 +15,14 @@ export async function runDeprecate(
   const { loaded } = await loadLocal(folderArg);
   const client = createClient(loadConfig(overrides));
 
+  if (loaded.kind === "workflow") {
+    throw new Error(
+      "Workflows don't have a deprecate concept — they have a single row with " +
+        "version snapshots and an active-version pointer. Use 'cococo delete workflow " +
+        "<handle>' to remove the workflow, or push a new version and re-publish to " +
+        "supersede the active one.",
+    );
+  }
   if (loaded.kind === "app") {
     throw new Error(
       "Custom apps don't have a deprecate concept — they have a single working " +

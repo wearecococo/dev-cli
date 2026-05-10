@@ -3,15 +3,27 @@ import { listAllArtifactFolders } from "../project.ts";
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   createDraft,
+  createWorkflow,
+  createWorkflowTrigger,
+  createWorkflowVersion,
   findEdgeAppDraft,
   getCustomAppByHandle,
   getDefinition,
+  getUserByEmail,
+  getWorkflowByName,
+  listWorkflowTriggers,
   updateDraftFile,
   updateDraftManifest,
+  updateWorkflow,
+  updateWorkflowTrigger,
   upsertCustomApp,
   upsertEdgeApp,
+  validateWorkflowDefinition,
   type CustomAppState,
   type EdgeAppState,
+  type TriggerConfigInputWire,
+  type WorkflowState,
+  type WorkflowTriggerState,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { makeFolder, walkIntegrationFiles } from "../project.ts";
@@ -32,7 +44,9 @@ import type {
   LoadedCustomApp,
   LoadedEdgeApp,
   LoadedIntegration,
+  LoadedWorkflow,
 } from "../loader.ts";
+import type { WorkflowTriggerConfig, WorkflowTriggerSpec } from "../define.ts";
 import { findDefinition, loadLocal } from "./_shared.ts";
 import { reportLintFindings, runLintFindings } from "./lint.ts";
 
@@ -93,6 +107,10 @@ export async function runPush(
   }
   if (loaded.kind === "edge") {
     await pushEdgeApp(client, folder.path, loaded);
+    return;
+  }
+  if (loaded.kind === "workflow") {
+    await pushWorkflow(client, folder.path, loaded);
     return;
   }
   await pushIntegration(client, folder.path, loaded);
@@ -340,4 +358,176 @@ function reportEdgeAppPush(
     `  ${result.handlers.length} handler(s), ${result.triggers.length} trigger(s), ` +
       `${result.libraries.length} librar${result.libraries.length === 1 ? "y" : "ies"}`,
   );
+}
+
+/**
+ * Push a workflow: validate the definition server-side, create or
+ * update the workflow row, snapshot a fresh version, then reconcile
+ * triggers. Triggers are upserted by `(workflowId, name)` — declared
+ * rows match are updated; missing-on-server are created. Triggers
+ * present on the server but not declared locally are left alone
+ * (additive); use `cococo delete trigger <workflow> <name>` to remove.
+ */
+async function pushWorkflow(
+  client: GraphQLClient,
+  folderPath: string,
+  loaded: LoadedWorkflow,
+): Promise<void> {
+  const { workflow } = loaded;
+
+  // Server-side schema validation. Failures here mean the definition
+  // doesn't satisfy the workflow JSON Schema — push refuses to create
+  // a version since the server would reject it on import anyway.
+  const validation = await validateWorkflowDefinition(client, workflow.definition);
+  if (!validation.isValid) {
+    console.error(`Workflow definition is invalid:`);
+    for (const e of validation.errors) console.error(`  ${e.path}: ${e.message}`);
+    throw new Error(
+      `Workflow ${workflow.handle} failed validation. Fix the definition and re-push.`,
+    );
+  }
+
+  // Resolve botUser → botUserId (optional).
+  let botUserId: string | undefined;
+  if (workflow.bot_user_email !== undefined) {
+    const user = await getUserByEmail(client, workflow.bot_user_email);
+    if (!user) {
+      throw new Error(
+        `Workflow ${workflow.handle} botUser '${workflow.bot_user_email}' ` +
+          `doesn't exist on the server. Declare them in users.ts and apply, ` +
+          `or remove the botUser ref.`,
+      );
+    }
+    botUserId = user.id;
+  }
+
+  const existing = await getWorkflowByName(client, workflow.name);
+  let row: WorkflowState;
+  if (existing) {
+    row = await updateWorkflow(client, {
+      id: existing.id,
+      name: workflow.name,
+      description: workflow.description,
+      isActive: workflow.is_active,
+      botUserId,
+      defaultNodeTimeoutSeconds: workflow.default_node_timeout_seconds,
+    });
+  } else {
+    row = await createWorkflow(client, {
+      name: workflow.name,
+      description: workflow.description,
+      isActive: workflow.is_active,
+      botUserId,
+      defaultNodeTimeoutSeconds: workflow.default_node_timeout_seconds,
+    });
+  }
+
+  const version = await createWorkflowVersion(client, {
+    workflowId: row.id,
+    definition: workflow.definition,
+  });
+
+  await reconcileWorkflowTriggers(client, row.id, workflow.triggers);
+
+  console.log(
+    `${existing ? "Updated" : "Created"} workflow ${workflow.handle} ` +
+      `(snapshot v${version.version}) → ${row.id}`,
+  );
+  console.log(`  folder: ${folderPath}`);
+  console.log(
+    `  ${workflow.definition.nodes.length} node(s), ` +
+      `${workflow.definition.edges.length} edge(s), ` +
+      `${workflow.definition.variables.length} variable(s), ` +
+      `${workflow.triggers.length} trigger(s)`,
+  );
+  if (existing?.currentVersionId === undefined || existing.currentVersionId === null) {
+    console.log(
+      `  Note: this workflow has no active version yet. ` +
+        `Run 'cococo publish ${workflow.handle}' to flip the active pointer to v${version.version}.`,
+    );
+  }
+}
+
+async function reconcileWorkflowTriggers(
+  client: GraphQLClient,
+  workflowId: string,
+  declared: WorkflowTriggerSpec[],
+): Promise<void> {
+  if (declared.length === 0) return;
+
+  const existing = await listWorkflowTriggers(client, workflowId);
+  const byName = new Map<string, WorkflowTriggerState>();
+  for (const t of existing) byName.set(t.name, t);
+
+  for (const t of declared) {
+    const config = toTriggerConfigWire(t.config);
+    const cur = byName.get(t.name);
+    if (cur) {
+      await updateWorkflowTrigger(client, {
+        id: cur.id,
+        name: t.name,
+        config,
+        isEnabled: t.isEnabled,
+        concurrencyPolicy: t.concurrencyPolicy,
+        maxConcurrentExecutions: t.maxConcurrentExecutions,
+      });
+      console.log(`  trigger ~ ${t.name}`);
+    } else {
+      await createWorkflowTrigger(client, {
+        workflowId,
+        name: t.name,
+        config,
+        versionId: t.versionId,
+        isEnabled: t.isEnabled,
+        concurrencyPolicy: t.concurrencyPolicy,
+        maxConcurrentExecutions: t.maxConcurrentExecutions,
+      });
+      console.log(`  trigger + ${t.name}`);
+    }
+  }
+}
+
+/**
+ * Map an author-side `WorkflowTriggerConfig` (discriminated on `kind`)
+ * to the platform's `TriggerConfigInput` (discriminated via `type` +
+ * one typed slot). Mirrors the same wire-vs-author shape gap we use
+ * for device protocols and edge-app I/O.
+ */
+function toTriggerConfigWire(c: WorkflowTriggerConfig): TriggerConfigInputWire {
+  if (c.kind === "scheduled") {
+    return {
+      type: "scheduled",
+      scheduled: {
+        cronExpression: c.cronExpression,
+        overlapPolicy: c.overlapPolicy,
+        timezone: c.timezone,
+      },
+    };
+  }
+  if (c.kind === "event") {
+    return {
+      type: "event",
+      event: { topic: c.topic, filter: c.filter, dataQuery: c.dataQuery },
+    };
+  }
+  if (c.kind === "deviceMqtt") {
+    return {
+      type: "deviceMqtt",
+      deviceMqtt: { topic: c.topic, deviceId: c.deviceId, filter: c.filter },
+    };
+  }
+  if (c.kind === "webhook") {
+    return {
+      type: "webhook",
+      webhook: { path: c.path, method: c.method, authRequired: c.authRequired },
+    };
+  }
+  return {
+    type: "edgeAppEvent",
+    edgeAppEvent: {
+      topic: c.topic,
+      controllerId: c.controllerId,
+      edgeAppHandle: c.edgeAppHandle,
+    },
+  };
 }

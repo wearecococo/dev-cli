@@ -6,6 +6,34 @@ export type EngineVersion = 1 | 2;
 
 export type FieldError = { path: string; message: string };
 
+/**
+ * The platform caps `first:` at 100 across every Connection-shaped
+ * listing. List helpers below loop with cursor pagination via this
+ * helper so callers always get the full set without surprises at 100.
+ */
+const PAGE_SIZE = 100;
+
+type CursorPage<T> = {
+  edges: { node: T }[];
+  pageInfo: { hasNextPage: boolean; endCursor?: string | null };
+};
+
+async function paginateAll<T>(
+  fetchPage: (after: string | undefined) => Promise<CursorPage<T>>,
+): Promise<T[]> {
+  const out: T[] = [];
+  let after: string | undefined;
+  while (true) {
+    const page = await fetchPage(after);
+    for (const edge of page.edges) out.push(edge.node);
+    if (!page.pageInfo.hasNextPage) break;
+    const next = page.pageInfo.endCursor;
+    if (next == null || next === after) break;
+    after = next;
+  }
+  return out;
+}
+
 type ResourceSpec = {
   id: string;
   type: string;
@@ -162,22 +190,24 @@ export async function listDefinitions(
   client: GraphQLClient,
   filter: { integrationId?: string; version?: string; status?: IntegrationDefinitionStatus },
 ): Promise<IntegrationDefinition[]> {
-  const query = `
-    query ListIntegrationDefinitions($filter: IntegrationDefinitionFilterInput) {
-      listIntegrationDefinitions(first: 100, filter: $filter) {
-        edges { node { ${DEFINITION_SUMMARY} } }
-      }
-    }
-  `;
   const filterArg: Record<string, unknown> = {};
   if (filter.integrationId) filterArg.integrationId = { eq: filter.integrationId };
   if (filter.version) filterArg.version = { eq: filter.version };
   if (filter.status) filterArg.status = { eq: filter.status };
-
-  const data = await client.request<{
-    listIntegrationDefinitions: { edges: { node: IntegrationDefinition }[] };
-  }>(query, { filter: filterArg });
-  return data.listIntegrationDefinitions.edges.map((e) => e.node);
+  return paginateAll<IntegrationDefinition>(async (after) => {
+    const query = `
+      query ListIntegrationDefinitions($filter: IntegrationDefinitionFilterInput, $first: Int!, $after: String) {
+        listIntegrationDefinitions(first: $first, filter: $filter, after: $after) {
+          edges { node { ${DEFINITION_SUMMARY} } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    `;
+    const data = await client.request<{
+      listIntegrationDefinitions: CursorPage<IntegrationDefinition>;
+    }>(query, { filter: filterArg, first: PAGE_SIZE, after });
+    return data.listIntegrationDefinitions;
+  });
 }
 
 export async function getDefinition(
@@ -437,17 +467,21 @@ const CUSTOM_APP_FIELDS = `
 export async function listCustomApps(
   client: GraphQLClient,
 ): Promise<CustomAppState[]> {
-  const query = `
-    query ListCustomApps {
-      listCustomApps(first: 200) {
-        edges { node { ${CUSTOM_APP_FIELDS} } }
+  return paginateAll<CustomAppState>(async (after) => {
+    const query = `
+      query ListCustomApps($first: Int!, $after: String) {
+        listCustomApps(first: $first, after: $after) {
+          edges { node { ${CUSTOM_APP_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listCustomApps: { edges: { node: CustomAppState }[] };
-  }>(query, {});
-  return data.listCustomApps.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{ listCustomApps: CursorPage<CustomAppState> }>(
+      query,
+      { first: PAGE_SIZE, after },
+    );
+    return data.listCustomApps;
+  });
 }
 
 export async function getCustomAppByHandle(
@@ -899,17 +933,21 @@ export async function listEdgeApps(
   const filterArg: Record<string, unknown> = {};
   if (filter?.handle) filterArg.handle = { eq: filter.handle };
   if (filter?.status) filterArg.status = { eq: filter.status };
-  const query = `
-    query ListEdgeApps($filter: EdgeAppFilterInput) {
-      listEdgeApps(first: 200, filter: $filter) {
-        edges { node { ${EDGE_APP_SUMMARY} } }
+  return paginateAll<EdgeAppState>(async (after) => {
+    const query = `
+      query ListEdgeApps($filter: EdgeAppFilterInput, $first: Int!, $after: String) {
+        listEdgeApps(first: $first, filter: $filter, after: $after) {
+          edges { node { ${EDGE_APP_SUMMARY} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listEdgeApps: { edges: { node: EdgeAppState }[] };
-  }>(query, { filter: filterArg });
-  return data.listEdgeApps.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{ listEdgeApps: CursorPage<EdgeAppState> }>(
+      query,
+      { filter: filterArg, first: PAGE_SIZE, after },
+    );
+    return data.listEdgeApps;
+  });
 }
 
 export async function getEdgeApp(
@@ -1070,17 +1108,22 @@ export async function listUsers(
 ): Promise<UserState[]> {
   const filterArg: Record<string, unknown> = {};
   if (filter?.email) filterArg.email = { eq: filter.email };
-  const query = `
-    query ListUsers($filter: UserFilterInput) {
-      listUsers(first: 500, filter: $filter) {
-        edges { node { ${USER_FIELDS} } }
+  return paginateAll<UserState>(async (after) => {
+    const query = `
+      query ListUsers($filter: UserFilterInput, $first: Int!, $after: String) {
+        listUsers(first: $first, filter: $filter, after: $after) {
+          edges { node { ${USER_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listUsers: { edges: { node: UserState }[] };
-  }>(query, { filter: filterArg });
-  return data.listUsers.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{ listUsers: CursorPage<UserState> }>(query, {
+      filter: filterArg,
+      first: PAGE_SIZE,
+      after,
+    });
+    return data.listUsers;
+  });
 }
 
 export async function getUserByEmail(
@@ -1155,17 +1198,21 @@ const POLICY_FIELDS = `
 `;
 
 export async function listIAMPolicies(client: GraphQLClient): Promise<IAMPolicyState[]> {
-  const query = `
-    query ListIAMPolicies {
-      listIAMPolicies(first: 500) {
-        edges { node { ${POLICY_FIELDS} } }
+  return paginateAll<IAMPolicyState>(async (after) => {
+    const query = `
+      query ListIAMPolicies($first: Int!, $after: String) {
+        listIAMPolicies(first: $first, after: $after) {
+          edges { node { ${POLICY_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listIAMPolicies: { edges: { node: IAMPolicyState }[] };
-  }>(query, {});
-  return data.listIAMPolicies.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{ listIAMPolicies: CursorPage<IAMPolicyState> }>(
+      query,
+      { first: PAGE_SIZE, after },
+    );
+    return data.listIAMPolicies;
+  });
 }
 
 export async function getIAMPolicy(
@@ -1335,17 +1382,22 @@ export async function listNetworks(
 ): Promise<NetworkState[]> {
   const filterArg: Record<string, unknown> = {};
   if (filter?.name) filterArg.name = { eq: filter.name };
-  const query = `
-    query ListNetworks($filter: NetworkFilterInput) {
-      listNetworks(first: 500, filter: $filter) {
-        edges { node { ${NETWORK_FIELDS} } }
+  return paginateAll<NetworkState>(async (after) => {
+    const query = `
+      query ListNetworks($filter: NetworkFilterInput, $first: Int!, $after: String) {
+        listNetworks(first: $first, filter: $filter, after: $after) {
+          edges { node { ${NETWORK_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listNetworks: { edges: { node: NetworkState }[] };
-  }>(query, { filter: filterArg });
-  return data.listNetworks.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{ listNetworks: CursorPage<NetworkState> }>(query, {
+      filter: filterArg,
+      first: PAGE_SIZE,
+      after,
+    });
+    return data.listNetworks;
+  });
 }
 
 export async function getNetworkByName(
@@ -1446,17 +1498,22 @@ export async function listDevices(
   const filterArg: Record<string, unknown> = {};
   if (filter?.identifier) filterArg.identifier = { eq: filter.identifier };
   if (filter?.networkId) filterArg.networkId = { eq: filter.networkId };
-  const query = `
-    query ListDevices($filter: DeviceFilterInput) {
-      listDevices(first: 500, filter: $filter) {
-        edges { node { ${DEVICE_FIELDS} } }
+  return paginateAll<DeviceState>(async (after) => {
+    const query = `
+      query ListDevices($filter: DeviceFilterInput, $first: Int!, $after: String) {
+        listDevices(first: $first, filter: $filter, after: $after) {
+          edges { node { ${DEVICE_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listDevices: { edges: { node: DeviceState }[] };
-  }>(query, { filter: filterArg });
-  return data.listDevices.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{ listDevices: CursorPage<DeviceState> }>(query, {
+      filter: filterArg,
+      first: PAGE_SIZE,
+      after,
+    });
+    return data.listDevices;
+  });
 }
 
 export async function getDeviceByIdentifier(
@@ -1547,17 +1604,22 @@ export async function listTeams(
 ): Promise<TeamState[]> {
   const filterArg: Record<string, unknown> = {};
   if (filter?.name) filterArg.name = { eq: filter.name };
-  const query = `
-    query ListTeams($filter: TeamFilterInput) {
-      listTeams(first: 500, filter: $filter) {
-        edges { node { ${TEAM_FIELDS} } }
+  return paginateAll<TeamState>(async (after) => {
+    const query = `
+      query ListTeams($filter: TeamFilterInput, $first: Int!, $after: String) {
+        listTeams(first: $first, filter: $filter, after: $after) {
+          edges { node { ${TEAM_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listTeams: { edges: { node: TeamState }[] };
-  }>(query, { filter: filterArg });
-  return data.listTeams.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{ listTeams: CursorPage<TeamState> }>(query, {
+      filter: filterArg,
+      first: PAGE_SIZE,
+      after,
+    });
+    return data.listTeams;
+  });
 }
 
 export async function getTeamByName(
@@ -1670,17 +1732,20 @@ export async function listCustomAppUsers(
   const filterArg: Record<string, unknown> = {};
   if (filter?.customAppId) filterArg.customAppId = { eq: filter.customAppId };
   if (filter?.userId) filterArg.userId = { eq: filter.userId };
-  const query = `
-    query ListCustomAppUsers($filter: CustomAppUserFilterInput) {
-      listCustomAppUsers(first: 500, filter: $filter) {
-        edges { node { id customAppId userId createdAt } }
+  return paginateAll<CustomAppUserBindingState>(async (after) => {
+    const query = `
+      query ListCustomAppUsers($filter: CustomAppUserFilterInput, $first: Int!, $after: String) {
+        listCustomAppUsers(first: $first, filter: $filter, after: $after) {
+          edges { node { id customAppId userId createdAt } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listCustomAppUsers: { edges: { node: CustomAppUserBindingState }[] };
-  }>(query, { filter: filterArg });
-  return data.listCustomAppUsers.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{
+      listCustomAppUsers: CursorPage<CustomAppUserBindingState>;
+    }>(query, { filter: filterArg, first: PAGE_SIZE, after });
+    return data.listCustomAppUsers;
+  });
 }
 
 export async function attachCustomAppUser(
@@ -1736,17 +1801,20 @@ export async function listCustomAppTeams(
   const filterArg: Record<string, unknown> = {};
   if (filter?.customAppId) filterArg.customAppId = { eq: filter.customAppId };
   if (filter?.teamId) filterArg.teamId = { eq: filter.teamId };
-  const query = `
-    query ListCustomAppTeams($filter: CustomAppTeamFilterInput) {
-      listCustomAppTeams(first: 500, filter: $filter) {
-        edges { node { id customAppId teamId createdAt } }
+  return paginateAll<CustomAppTeamBindingState>(async (after) => {
+    const query = `
+      query ListCustomAppTeams($filter: CustomAppTeamFilterInput, $first: Int!, $after: String) {
+        listCustomAppTeams(first: $first, filter: $filter, after: $after) {
+          edges { node { id customAppId teamId createdAt } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listCustomAppTeams: { edges: { node: CustomAppTeamBindingState }[] };
-  }>(query, { filter: filterArg });
-  return data.listCustomAppTeams.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{
+      listCustomAppTeams: CursorPage<CustomAppTeamBindingState>;
+    }>(query, { filter: filterArg, first: PAGE_SIZE, after });
+    return data.listCustomAppTeams;
+  });
 }
 
 export async function attachCustomAppTeam(
@@ -1842,17 +1910,21 @@ export async function listControllers(
 ): Promise<ControllerState[]> {
   const filterArg: Record<string, unknown> = {};
   if (filter?.handle) filterArg.handle = { eq: filter.handle };
-  const query = `
-    query ListControllers($filter: ControllerFilterInput) {
-      listControllers(first: 500, filter: $filter) {
-        edges { node { ${CONTROLLER_FIELDS} } }
+  return paginateAll<ControllerState>(async (after) => {
+    const query = `
+      query ListControllers($filter: ControllerFilterInput, $first: Int!, $after: String) {
+        listControllers(first: $first, filter: $filter, after: $after) {
+          edges { node { ${CONTROLLER_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listControllers: { edges: { node: ControllerState }[] };
-  }>(query, { filter: filterArg });
-  return data.listControllers.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{ listControllers: CursorPage<ControllerState> }>(
+      query,
+      { filter: filterArg, first: PAGE_SIZE, after },
+    );
+    return data.listControllers;
+  });
 }
 
 export async function getControllerByHandle(
@@ -1992,17 +2064,20 @@ export async function listControllerTokens(
   if (filter?.controllerId) filterArg.controllerId = { eq: filter.controllerId };
   if (filter?.name) filterArg.name = { eq: filter.name };
   if (filter?.isRevoked !== undefined) filterArg.isRevoked = { eq: filter.isRevoked };
-  const query = `
-    query ListControllerTokens($filter: ControllerTokenFilterInput) {
-      listControllerTokens(first: 500, filter: $filter) {
-        edges { node { ${TOKEN_FIELDS} } }
+  return paginateAll<ControllerTokenState>(async (after) => {
+    const query = `
+      query ListControllerTokens($filter: ControllerTokenFilterInput, $first: Int!, $after: String) {
+        listControllerTokens(first: $first, filter: $filter, after: $after) {
+          edges { node { ${TOKEN_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listControllerTokens: { edges: { node: ControllerTokenState }[] };
-  }>(query, { filter: filterArg });
-  return data.listControllerTokens.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{
+      listControllerTokens: CursorPage<ControllerTokenState>;
+    }>(query, { filter: filterArg, first: PAGE_SIZE, after });
+    return data.listControllerTokens;
+  });
 }
 
 export type CreatedControllerToken = {
@@ -2081,17 +2156,20 @@ export async function listEdgeAppInstallations(
   const filterArg: Record<string, unknown> = {};
   if (filter?.controllerId) filterArg.controllerId = { eq: filter.controllerId };
   if (filter?.edgeAppId) filterArg.edgeAppId = { eq: filter.edgeAppId };
-  const query = `
-    query ListEdgeAppInstallations($filter: EdgeAppInstallationFilterInput) {
-      listEdgeAppInstallations(first: 500, filter: $filter) {
-        edges { node { ${INSTALL_FIELDS} } }
+  return paginateAll<EdgeAppInstallationState>(async (after) => {
+    const query = `
+      query ListEdgeAppInstallations($filter: EdgeAppInstallationFilterInput, $first: Int!, $after: String) {
+        listEdgeAppInstallations(first: $first, filter: $filter, after: $after) {
+          edges { node { ${INSTALL_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
       }
-    }
-  `;
-  const data = await client.request<{
-    listEdgeAppInstallations: { edges: { node: EdgeAppInstallationState }[] };
-  }>(query, { filter: filterArg });
-  return data.listEdgeAppInstallations.edges.map((e) => e.node);
+    `;
+    const data = await client.request<{
+      listEdgeAppInstallations: CursorPage<EdgeAppInstallationState>;
+    }>(query, { filter: filterArg, first: PAGE_SIZE, after });
+    return data.listEdgeAppInstallations;
+  });
 }
 
 export async function upsertEdgeAppInstallation(
@@ -2186,4 +2264,585 @@ export async function resolveEdgeAppByHandleAndVersion(
 ): Promise<EdgeAppState | undefined> {
   const matches = await listEdgeApps(client, { handle });
   return matches.find((e) => e.version === version);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Workflows. The platform models a workflow as a mutable workflow row
+// with immutable version snapshots and a `currentVersionId` pointer
+// (cf. custom apps' working-copy-plus-snapshots model). Triggers are
+// independent rows that pin a workflow + an optional specific version.
+//
+// Each push creates a fresh version snapshot; publish flips the
+// `currentVersionId` pointer. Triggers are reconciled additively at
+// the row level — declared rows get upserted by `(workflowId, name)`,
+// undeclared rows are left alone (use `cococo delete trigger` to
+// remove explicitly).
+// ──────────────────────────────────────────────────────────────────────
+
+export type ConcurrencyPolicy = "ALLOW" | "QUEUE" | "SKIP" | "CANCEL";
+export type WorkflowSerializationFormat = "YAML" | "JSON";
+
+export type WorkflowState = {
+  id: string;
+  tenantId: string;
+  name: string;
+  description?: string | null;
+  currentVersionId?: string | null;
+  botUserId?: string | null;
+  defaultNodeTimeoutSeconds?: number | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const WORKFLOW_FIELDS = `
+  id tenantId name description currentVersionId botUserId
+  defaultNodeTimeoutSeconds isActive createdAt updatedAt
+`;
+
+export type WorkflowNodeWire = {
+  id: string;
+  name: string;
+  type: string;
+  /** JSON string — the platform stores per-node config opaquely. */
+  config?: string | null;
+  position?: { x: number; y: number } | null;
+};
+
+export type WorkflowEdgeWire = {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  condition?: string | null;
+};
+
+export type WorkflowVariableWire = {
+  name: string;
+  type: string;
+  /** JSON string — variables can hold any JSON value as their default. */
+  defaultValue?: string | null;
+  description?: string | null;
+};
+
+export type WorkflowDefinitionWire = {
+  nodes: WorkflowNodeWire[];
+  edges: WorkflowEdgeWire[];
+  variables: WorkflowVariableWire[];
+};
+
+export type WorkflowVersionState = {
+  id: string;
+  workflowId: string;
+  tenantId: string;
+  version: number;
+  definition: WorkflowDefinitionWire;
+  isValid: boolean;
+  validationErrors: string[];
+  createdAt: string;
+};
+
+const WORKFLOW_VERSION_FIELDS = `
+  id workflowId tenantId version isValid validationErrors createdAt
+  definition {
+    nodes { id name type config position { x y } }
+    edges { id fromNodeId toNodeId condition }
+    variables { name type defaultValue description }
+  }
+`;
+
+export type WorkflowTriggerState = {
+  id: string;
+  tenantId: string;
+  workflowId: string;
+  versionId?: string | null;
+  name: string;
+  /** Always JSON when read; submit a typed `TriggerConfigInput` on write. */
+  configJSON: string;
+  isEnabled: boolean;
+  concurrencyPolicy: ConcurrencyPolicy;
+  maxConcurrentExecutions?: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const TRIGGER_FIELDS = `
+  id tenantId workflowId versionId name configJSON isEnabled
+  concurrencyPolicy maxConcurrentExecutions createdAt updatedAt
+`;
+
+/**
+ * Discriminated trigger config matching the platform's
+ * `TriggerConfigInput`. The wire shape uses a `type` discriminator and
+ * one of five typed slots; we present it as a sum-type over `kind`
+ * locally, then map at submit time.
+ */
+export type TriggerConfigInputWire =
+  | {
+      type: "scheduled";
+      scheduled: {
+        cronExpression: string;
+        overlapPolicy: string;
+        timezone?: string;
+      };
+    }
+  | {
+      type: "event";
+      event: { topic: string; filter?: string; dataQuery?: string };
+    }
+  | {
+      type: "deviceMqtt";
+      deviceMqtt: { topic: string; deviceId?: string; filter?: string };
+    }
+  | {
+      type: "webhook";
+      webhook: { path: string; method: string; authRequired: boolean };
+    }
+  | {
+      type: "edgeAppEvent";
+      edgeAppEvent: {
+        topic?: string;
+        controllerId?: string;
+        edgeAppHandle?: string;
+      };
+    };
+
+// ── Workflow CRUD ─────────────────────────────────────────────────────
+
+export async function listWorkflows(
+  client: GraphQLClient,
+  filter?: { name?: string },
+): Promise<WorkflowState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.name) filterArg.name = { eq: filter.name };
+  return paginateAll<WorkflowState>(async (after) => {
+    const query = `
+      query ListWorkflows($filter: WorkflowFilterInput, $first: Int!, $after: String) {
+        listWorkflows(first: $first, filter: $filter, after: $after) {
+          edges { node { ${WORKFLOW_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    `;
+    const data = await client.request<{ listWorkflows: CursorPage<WorkflowState> }>(query, {
+      filter: filterArg,
+      first: PAGE_SIZE,
+      after,
+    });
+    return data.listWorkflows;
+  });
+}
+
+export async function getWorkflowByName(
+  client: GraphQLClient,
+  name: string,
+): Promise<WorkflowState | undefined> {
+  const matches = await listWorkflows(client, { name });
+  return matches[0];
+}
+
+export async function getWorkflow(
+  client: GraphQLClient,
+  id: string,
+): Promise<WorkflowState> {
+  const query = `
+    query GetWorkflow($id: WorkflowID!) {
+      getWorkflow(id: $id) { ${WORKFLOW_FIELDS} }
+    }
+  `;
+  const data = await client.request<{ getWorkflow: WorkflowState | null }>(query, { id });
+  if (!data.getWorkflow) throw new Error(`Workflow ${id} not found.`);
+  return data.getWorkflow;
+}
+
+export async function createWorkflow(
+  client: GraphQLClient,
+  input: {
+    name: string;
+    description?: string;
+    isActive?: boolean;
+    botUserId?: string;
+    defaultNodeTimeoutSeconds?: number;
+  },
+): Promise<WorkflowState> {
+  const query = `
+    mutation CreateWorkflow($input: CreateWorkflowInput!) {
+      createWorkflow(input: $input) {
+        workflow { ${WORKFLOW_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    createWorkflow: { workflow: WorkflowState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.createWorkflow.errors.length > 0) {
+    const summary = data.createWorkflow.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`createWorkflow failed: ${summary}`);
+  }
+  if (!data.createWorkflow.workflow) {
+    throw new Error(`createWorkflow returned no workflow and no errors.`);
+  }
+  return data.createWorkflow.workflow;
+}
+
+export async function updateWorkflow(
+  client: GraphQLClient,
+  input: {
+    id: string;
+    name?: string;
+    description?: string;
+    isActive?: boolean;
+    botUserId?: string;
+    defaultNodeTimeoutSeconds?: number;
+  },
+): Promise<WorkflowState> {
+  const query = `
+    mutation UpdateWorkflow($input: UpdateWorkflowInput!) {
+      updateWorkflow(input: $input) {
+        workflow { ${WORKFLOW_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    updateWorkflow: { workflow: WorkflowState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.updateWorkflow.errors.length > 0) {
+    const summary = data.updateWorkflow.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`updateWorkflow failed: ${summary}`);
+  }
+  if (!data.updateWorkflow.workflow) {
+    throw new Error(`updateWorkflow returned no workflow and no errors.`);
+  }
+  return data.updateWorkflow.workflow;
+}
+
+export async function deleteWorkflow(client: GraphQLClient, id: string): Promise<void> {
+  const query = `mutation DeleteWorkflow($id: WorkflowID!) { deleteWorkflow(id: $id) { success } }`;
+  await client.request(query, { id });
+}
+
+// ── Versions ─────────────────────────────────────────────────────────
+
+export async function listWorkflowVersions(
+  client: GraphQLClient,
+  workflowId: string,
+): Promise<WorkflowVersionState[]> {
+  return paginateAll<WorkflowVersionState>(async (after) => {
+    const query = `
+      query ListWorkflowVersions($workflowId: WorkflowID!, $first: Int!, $after: String) {
+        listWorkflowVersions(workflowId: $workflowId, first: $first, after: $after) {
+          edges { node { ${WORKFLOW_VERSION_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    `;
+    const data = await client.request<{
+      listWorkflowVersions: CursorPage<WorkflowVersionState>;
+    }>(query, { workflowId, first: PAGE_SIZE, after });
+    return data.listWorkflowVersions;
+  });
+}
+
+export async function getWorkflowVersion(
+  client: GraphQLClient,
+  id: string,
+): Promise<WorkflowVersionState> {
+  const query = `
+    query GetWorkflowVersion($id: WorkflowVersionID!) {
+      getWorkflowVersion(id: $id) { ${WORKFLOW_VERSION_FIELDS} }
+    }
+  `;
+  const data = await client.request<{ getWorkflowVersion: WorkflowVersionState | null }>(query, { id });
+  if (!data.getWorkflowVersion) throw new Error(`Workflow version ${id} not found.`);
+  return data.getWorkflowVersion;
+}
+
+export async function createWorkflowVersion(
+  client: GraphQLClient,
+  input: { workflowId: string; definition: WorkflowDefinitionWire },
+): Promise<WorkflowVersionState> {
+  const query = `
+    mutation CreateWorkflowVersion($input: CreateWorkflowVersionInput!) {
+      createWorkflowVersion(input: $input) {
+        version { ${WORKFLOW_VERSION_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    createWorkflowVersion: { version: WorkflowVersionState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.createWorkflowVersion.errors.length > 0) {
+    const summary = data.createWorkflowVersion.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`createWorkflowVersion failed: ${summary}`);
+  }
+  if (!data.createWorkflowVersion.version) {
+    throw new Error(`createWorkflowVersion returned no version and no errors.`);
+  }
+  return data.createWorkflowVersion.version;
+}
+
+export async function setActiveVersion(
+  client: GraphQLClient,
+  input: { workflowId: string; versionId: string },
+): Promise<WorkflowState> {
+  const query = `
+    mutation SetActiveVersion($input: SetActiveVersionInput!) {
+      setActiveVersion(input: $input) {
+        workflow { ${WORKFLOW_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    setActiveVersion: { workflow: WorkflowState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.setActiveVersion.errors.length > 0) {
+    const summary = data.setActiveVersion.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`setActiveVersion failed: ${summary}`);
+  }
+  if (!data.setActiveVersion.workflow) {
+    throw new Error(`setActiveVersion returned no workflow and no errors.`);
+  }
+  return data.setActiveVersion.workflow;
+}
+
+export async function validateWorkflowDefinition(
+  client: GraphQLClient,
+  definition: WorkflowDefinitionWire,
+): Promise<{ isValid: boolean; errors: FieldError[] }> {
+  const query = `
+    mutation ValidateWorkflow($input: ValidateWorkflowInput!) {
+      validateWorkflow(input: $input) {
+        isValid
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    validateWorkflow: { isValid: boolean; errors: FieldError[] };
+  }>(query, { input: { definition } });
+  return data.validateWorkflow;
+}
+
+// ── Schema ───────────────────────────────────────────────────────────
+
+export async function getWorkflowSchema(client: GraphQLClient): Promise<string> {
+  const query = `query GetWorkflowSchema { getWorkflowSchema }`;
+  const data = await client.request<{ getWorkflowSchema: string }>(query, {});
+  return data.getWorkflowSchema;
+}
+
+// ── Export / import ──────────────────────────────────────────────────
+
+export async function exportWorkflow(
+  client: GraphQLClient,
+  versionId: string,
+  format: WorkflowSerializationFormat = "YAML",
+): Promise<{ content: string; format: WorkflowSerializationFormat }> {
+  const query = `
+    mutation ExportWorkflow($input: ExportWorkflowInput!) {
+      exportWorkflow(input: $input) {
+        content
+        format
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    exportWorkflow: {
+      content: string;
+      format: WorkflowSerializationFormat;
+      errors: FieldError[];
+    };
+  }>(query, { input: { versionId, format } });
+  if (data.exportWorkflow.errors.length > 0) {
+    const summary = data.exportWorkflow.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`exportWorkflow failed: ${summary}`);
+  }
+  return { content: data.exportWorkflow.content, format: data.exportWorkflow.format };
+}
+
+export async function importWorkflow(
+  client: GraphQLClient,
+  input: {
+    workflowId: string;
+    content: string;
+    format: WorkflowSerializationFormat;
+    validate?: boolean;
+  },
+): Promise<WorkflowVersionState> {
+  const query = `
+    mutation ImportWorkflow($input: ImportWorkflowInput!) {
+      importWorkflow(input: $input) {
+        version { ${WORKFLOW_VERSION_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    importWorkflow: { version: WorkflowVersionState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.importWorkflow.errors.length > 0) {
+    const summary = data.importWorkflow.errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`importWorkflow failed: ${summary}`);
+  }
+  if (!data.importWorkflow.version) {
+    throw new Error(`importWorkflow returned no version and no errors.`);
+  }
+  return data.importWorkflow.version;
+}
+
+// ── Triggers ─────────────────────────────────────────────────────────
+
+export async function listWorkflowTriggers(
+  client: GraphQLClient,
+  workflowId: string,
+): Promise<WorkflowTriggerState[]> {
+  const query = `
+    query WorkflowTriggers($workflowId: WorkflowID!) {
+      workflowTriggers(workflowId: $workflowId) { ${TRIGGER_FIELDS} }
+    }
+  `;
+  const data = await client.request<{ workflowTriggers: WorkflowTriggerState[] }>(query, {
+    workflowId,
+  });
+  return data.workflowTriggers;
+}
+
+export async function createWorkflowTrigger(
+  client: GraphQLClient,
+  input: {
+    workflowId: string;
+    name: string;
+    config: TriggerConfigInputWire;
+    versionId?: string;
+    isEnabled?: boolean;
+    concurrencyPolicy?: ConcurrencyPolicy;
+    maxConcurrentExecutions?: number;
+  },
+): Promise<WorkflowTriggerState> {
+  const query = `
+    mutation CreateWorkflowTrigger($input: CreateWorkflowTriggerInput!) {
+      createWorkflowTrigger(input: $input) {
+        trigger { ${TRIGGER_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    createWorkflowTrigger: { trigger: WorkflowTriggerState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.createWorkflowTrigger.errors.length > 0) {
+    const summary = data.createWorkflowTrigger.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`createWorkflowTrigger failed: ${summary}`);
+  }
+  if (!data.createWorkflowTrigger.trigger) {
+    throw new Error(`createWorkflowTrigger returned no trigger and no errors.`);
+  }
+  return data.createWorkflowTrigger.trigger;
+}
+
+export async function updateWorkflowTrigger(
+  client: GraphQLClient,
+  input: {
+    id: string;
+    name?: string;
+    config?: TriggerConfigInputWire;
+    isEnabled?: boolean;
+    concurrencyPolicy?: ConcurrencyPolicy;
+    maxConcurrentExecutions?: number;
+  },
+): Promise<WorkflowTriggerState> {
+  const query = `
+    mutation UpdateWorkflowTrigger($input: UpdateWorkflowTriggerInput!) {
+      updateWorkflowTrigger(input: $input) {
+        trigger { ${TRIGGER_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    updateWorkflowTrigger: { trigger: WorkflowTriggerState | null; errors: FieldError[] };
+  }>(query, { input });
+  if (data.updateWorkflowTrigger.errors.length > 0) {
+    const summary = data.updateWorkflowTrigger.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`updateWorkflowTrigger failed: ${summary}`);
+  }
+  if (!data.updateWorkflowTrigger.trigger) {
+    throw new Error(`updateWorkflowTrigger returned no trigger and no errors.`);
+  }
+  return data.updateWorkflowTrigger.trigger;
+}
+
+export async function deleteWorkflowTrigger(client: GraphQLClient, id: string): Promise<void> {
+  const query = `
+    mutation DeleteWorkflowTrigger($id: WorkflowTriggerID!) {
+      deleteWorkflowTrigger(id: $id) { success }
+    }
+  `;
+  await client.request(query, { id });
+}
+
+export async function enableWorkflowTrigger(
+  client: GraphQLClient,
+  id: string,
+): Promise<WorkflowTriggerState> {
+  const query = `
+    mutation EnableWorkflowTrigger($id: WorkflowTriggerID!) {
+      enableWorkflowTrigger(id: $id) {
+        trigger { ${TRIGGER_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    enableWorkflowTrigger: { trigger: WorkflowTriggerState | null; errors: FieldError[] };
+  }>(query, { id });
+  if (data.enableWorkflowTrigger.errors.length > 0) {
+    const summary = data.enableWorkflowTrigger.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`enableWorkflowTrigger failed: ${summary}`);
+  }
+  if (!data.enableWorkflowTrigger.trigger) {
+    throw new Error(`enableWorkflowTrigger returned no trigger and no errors.`);
+  }
+  return data.enableWorkflowTrigger.trigger;
+}
+
+export async function disableWorkflowTrigger(
+  client: GraphQLClient,
+  id: string,
+): Promise<WorkflowTriggerState> {
+  const query = `
+    mutation DisableWorkflowTrigger($id: WorkflowTriggerID!) {
+      disableWorkflowTrigger(id: $id) {
+        trigger { ${TRIGGER_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    disableWorkflowTrigger: { trigger: WorkflowTriggerState | null; errors: FieldError[] };
+  }>(query, { id });
+  if (data.disableWorkflowTrigger.errors.length > 0) {
+    const summary = data.disableWorkflowTrigger.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`disableWorkflowTrigger failed: ${summary}`);
+  }
+  if (!data.disableWorkflowTrigger.trigger) {
+    throw new Error(`disableWorkflowTrigger returned no trigger and no errors.`);
+  }
+  return data.disableWorkflowTrigger.trigger;
 }

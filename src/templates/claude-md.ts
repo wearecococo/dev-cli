@@ -17,13 +17,14 @@ tenant via the \`@wearecococo/dev-cli\` CLI (\`bunx cococo …\`).
 
 ## What's in here
 
-Three kinds of *artifacts* (each in its own folder, with a
+Four kinds of *artifacts* (each in its own folder, with a
 \`manifest.ts\` and any Lua/HTML files):
 
 \`\`\`
 integrations/<short-name>/        # background workers + handlers
 custom_apps/<handle>/             # user-facing pages/dashboards
 edge_apps/<handle>/               # apps that run on a controller
+workflows/<handle>/               # node-and-edge DAGs (cron / event / webhook / device-MQTT triggers)
 \`\`\`
 
 Plus *tenant configuration* as flat per-kind files at the **repo
@@ -53,20 +54,20 @@ of every spec before authoring — it's hand-typed and authoritative.
 ## Core commands
 
 \`\`\`sh
-bunx cococo init <id|handle> [--type integration|app|edge]    # scaffold an artifact folder
+bunx cococo init <id|handle> [--type integration|app|edge|workflow]    # scaffold an artifact folder
 bunx cococo push <folder|--all> [--strict]                    # mirror local → remote (lints first)
 bunx cococo lint <folder|--all> [--strict]                    # validate Lua via the server
 bunx cococo validate <folder|--all>                           # server-validate the remote draft
-bunx cococo publish <folder|--all>                            # ship: DRAFT → PUBLISHED
-bunx cococo deprecate <folder>                                # retire PUBLISHED → DEPRECATED
-bunx cococo pull <id|handle> [--type app|edge] [-f]           # download remote → local
+bunx cococo publish <folder|--all>                            # ship: DRAFT → PUBLISHED (workflows: flip active version pointer)
+bunx cococo deprecate <folder>                                # retire PUBLISHED → DEPRECATED (integrations + edge apps)
+bunx cococo pull <id|handle> [--type app|edge|workflow] [-f]  # download remote → local
 bunx cococo apply                                             # apply tenant ops files
 bunx cococo delete <kind> <args>                              # remove a tenant ops resource
 bunx cococo dump <kind|all>                                   # pull server state into local ops files
 bunx cococo list                                              # what's on the server
 \`\`\`
 
-\`--all\` walks \`integrations/\`, \`custom_apps/\`, and \`edge_apps/\`.
+\`--all\` walks \`integrations/\`, \`custom_apps/\`, \`edge_apps/\`, and \`workflows/\`.
 **push** and **publish** stop on the first failure (server-mutating);
 **lint** and **validate** keep going and aggregate (read-only).
 
@@ -145,6 +146,17 @@ the canonical reference.
 5. Add to \`edge_app_installations.ts\`:
    \`{ controller: "press-01", app: "door-monitor", version: 1 }\`
 6. \`cococo apply\` — installs on the controller
+
+**Add a scheduled workflow:**
+1. \`cococo init nightly-rollup --type workflow\` — scaffold
+2. Edit \`workflows/nightly-rollup/manifest.ts\` — fill in nodes /
+   edges / triggers. Node \`config\` is opaque (\`unknown\`) — the
+   server validates against the per-node-type JSON Schema. Use the
+   MCP \`describe_node_type\` tool to look up valid \`config\` shapes.
+3. \`cococo lint nightly-rollup\` — server-validates the definition
+4. \`cococo push nightly-rollup\` — creates / updates the workflow row
+   and snapshots a new version
+5. \`cococo publish nightly-rollup\` — flips the active version pointer
 
 **Onboard a new operator:**
 1. Add to \`users.ts\`: \`{ email: "bob@acme.com", kind: "HUMAN" }\`

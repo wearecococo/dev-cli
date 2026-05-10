@@ -14,6 +14,8 @@ import type {
   EdgeAppMQTTBroker,
   EdgeAppOPCUAEndpoint,
   EdgeAppSNMPDevice,
+  WorkflowTriggerState,
+  WorkflowVersionState,
 } from "./graphql/operations.ts";
 
 /**
@@ -462,6 +464,148 @@ function transformHttpRoute(
     if (auth.mode === "BEARER" && !Array.isArray(auth.bearerTokens)) {
       auth.bearerTokens = [placeholder(`HTTP_${slug}_BEARER`)];
     }
+  }
+  return out;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Workflow printer. Emits a `defineWorkflow({...})` manifest.ts from
+// a server-resolved version + triggers. Node `config` and variable
+// `defaultValue` come back as JSON strings; we parse them so the emitted
+// TS is plain object literals (the loader re-stringifies on push).
+// ──────────────────────────────────────────────────────────────────────
+
+export type WorkflowPrintInput = {
+  handle: string;
+  /** Display name; omit when it equals `handle`. */
+  displayName?: string;
+  description?: string;
+  isActive?: boolean;
+  defaultNodeTimeoutSeconds?: number;
+  /** Bot user email; omit when no botUser is set on the server row. */
+  botUserEmail?: string;
+  version: WorkflowVersionState;
+  triggers: WorkflowTriggerState[];
+};
+
+export function printWorkflowManifestTs(input: WorkflowPrintInput): string {
+  const body: Record<string, unknown> = { handle: input.handle };
+  if (input.displayName) body.displayName = input.displayName;
+  if (input.description) body.description = input.description;
+  if (input.isActive !== undefined) body.isActive = input.isActive;
+  if (input.botUserEmail) body.botUser = input.botUserEmail;
+  if (input.defaultNodeTimeoutSeconds !== undefined) {
+    body.defaultNodeTimeoutSeconds = input.defaultNodeTimeoutSeconds;
+  }
+
+  body.variables = input.version.definition.variables.map((v) => ({
+    name: v.name,
+    type: v.type,
+    defaultValue: parseMaybeJson(v.defaultValue),
+    description: v.description ?? undefined,
+  }));
+
+  body.nodes = input.version.definition.nodes.map((n) => ({
+    id: n.id,
+    name: n.name,
+    type: n.type,
+    config: parseMaybeJson(n.config),
+    position: n.position ?? undefined,
+  }));
+
+  body.edges = input.version.definition.edges.map((e) => ({
+    id: e.id,
+    from: e.fromNodeId,
+    to: e.toNodeId,
+    condition: e.condition ?? undefined,
+  }));
+
+  body.triggers = input.triggers.map((t) => {
+    const config = serverTriggerToAuthorConfig(t.configJSON);
+    return {
+      name: t.name,
+      config,
+      isEnabled: t.isEnabled,
+      concurrencyPolicy: t.concurrencyPolicy,
+      maxConcurrentExecutions: t.maxConcurrentExecutions ?? undefined,
+    };
+  });
+
+  return (
+    `import { defineWorkflow } from "@wearecococo/dev-cli/define";\n\n` +
+    `export default defineWorkflow(${printObject(body, 0)});\n`
+  );
+}
+
+/**
+ * Parse a JSON string (defaultValue / config) back to its original
+ * shape, returning `undefined` for null/empty/unparseable input. The
+ * printer renders the result as a plain object literal.
+ */
+function parseMaybeJson(value: string | null | undefined): unknown {
+  if (value === undefined || value === null || value === "") return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    // Don't fail the whole pull on a malformed config blob — emit the
+    // raw string and let the user fix it.
+    return value;
+  }
+}
+
+/**
+ * The server returns trigger config as a single JSON blob (with
+ * `type` + one typed slot). Map it back to the author-side
+ * discriminated union (`{ kind: ..., ...flat fields }`).
+ */
+function serverTriggerToAuthorConfig(json: string): Record<string, unknown> {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return { kind: "event", topic: "PARSE_ERROR" };
+  }
+  const type = parsed.type;
+  if (type === "scheduled") {
+    const s = (parsed.scheduled ?? {}) as Record<string, unknown>;
+    return strip({
+      kind: "scheduled",
+      cronExpression: s.cronExpression,
+      overlapPolicy: s.overlapPolicy,
+      timezone: s.timezone,
+    });
+  }
+  if (type === "event") {
+    const e = (parsed.event ?? {}) as Record<string, unknown>;
+    return strip({ kind: "event", topic: e.topic, filter: e.filter, dataQuery: e.dataQuery });
+  }
+  if (type === "deviceMqtt") {
+    const m = (parsed.deviceMqtt ?? {}) as Record<string, unknown>;
+    return strip({ kind: "deviceMqtt", topic: m.topic, deviceId: m.deviceId, filter: m.filter });
+  }
+  if (type === "webhook") {
+    const w = (parsed.webhook ?? {}) as Record<string, unknown>;
+    return strip({
+      kind: "webhook",
+      path: w.path,
+      method: w.method,
+      authRequired: w.authRequired,
+    });
+  }
+  // edgeAppEvent
+  const e = (parsed.edgeAppEvent ?? {}) as Record<string, unknown>;
+  return strip({
+    kind: "edgeAppEvent",
+    topic: e.topic,
+    controllerId: e.controllerId,
+    edgeAppHandle: e.edgeAppHandle,
+  });
+}
+
+function strip(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined && v !== null) out[k] = v;
   }
   return out;
 }

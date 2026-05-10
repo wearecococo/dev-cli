@@ -224,6 +224,7 @@ export type ManifestKind =
   | "integration"
   | "app"
   | "edge"
+  | "workflow"
   | "users"
   | "iam_policies"
   | "iam_policy_bindings"
@@ -246,6 +247,7 @@ export function manifestKind(value: unknown): ManifestKind | undefined {
   return k === "integration" ||
     k === "app" ||
     k === "edge" ||
+    k === "workflow" ||
     k === "users" ||
     k === "iam_policies" ||
     k === "iam_policy_bindings" ||
@@ -592,6 +594,131 @@ export function defineEdgeApp<H extends Record<string, LuaSource>>(
   spec: EdgeAppV2<H>,
 ): Tagged<EdgeAppV2<H>, "edge"> {
   return Object.assign({}, spec, { [KIND_TAG]: "edge" as const });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Workflows. The platform models a workflow as a mutable workflow row
+// plus immutable version snapshots; each push creates a new version,
+// publish flips the active pointer. Definitions are graphs of nodes,
+// edges, and variables — node `config` is JSON-serialised at the wire
+// boundary because the platform validates per-node-type via JSON Schema
+// rather than at the GraphQL level.
+//
+// Phase 1 keeps node config typing intentionally loose (`unknown`) and
+// relies on server-side `validateWorkflow` to catch schema violations.
+// A future codegen pass will derive a discriminated `WorkflowNode`
+// union from `getWorkflowSchema` and tighten authoring ergonomics.
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * A workflow variable. `defaultValue` is any JSON-serialisable value
+ * (including objects/arrays); the loader stringifies it for the wire.
+ */
+export type WorkflowVariable = {
+  name: string;
+  type: string;
+  defaultValue?: unknown;
+  description?: string;
+};
+
+/**
+ * A workflow node. `config` is opaque from the CLI's perspective — the
+ * platform's per-node-type JSON Schema dictates valid shapes. Code-bearing
+ * configs (e.g. a Lua script) accept `luaFile()` refs; the loader inlines
+ * them before serialisation.
+ */
+export type WorkflowNode = {
+  /** Stable id, unique within the workflow. */
+  id: string;
+  name: string;
+  type: string;
+  /** Per-node config object. Server-validated; pre-codegen, this is unknown. */
+  config?: unknown;
+  position?: { x: number; y: number };
+};
+
+export type WorkflowEdge = {
+  id: string;
+  /** Authoring-friendly aliases — wire shape is `fromNodeId` / `toNodeId`. */
+  from: string;
+  to: string;
+  /** Optional condition expression evaluated to decide whether to traverse. */
+  condition?: string;
+};
+
+/**
+ * Trigger config — discriminated on `kind` to mirror the platform's
+ * `TriggerConfigInput`. Each variant maps to one of the typed input
+ * slots at submit time.
+ */
+export type WorkflowTriggerConfig =
+  | {
+      kind: "scheduled";
+      cronExpression: string;
+      overlapPolicy: string;
+      timezone?: string;
+    }
+  | {
+      kind: "event";
+      topic: string;
+      filter?: string;
+      dataQuery?: string;
+    }
+  | {
+      kind: "deviceMqtt";
+      topic: string;
+      deviceId?: string;
+      filter?: string;
+    }
+  | {
+      kind: "webhook";
+      path: string;
+      method: string;
+      authRequired: boolean;
+    }
+  | {
+      kind: "edgeAppEvent";
+      topic?: string;
+      controllerId?: string;
+      edgeAppHandle?: string;
+    };
+
+export type WorkflowTriggerSpec = {
+  /** Natural key — `(workflowId, name)` is unique per platform. */
+  name: string;
+  config: WorkflowTriggerConfig;
+  isEnabled?: boolean;
+  concurrencyPolicy?: "ALLOW" | "QUEUE" | "SKIP" | "CANCEL";
+  maxConcurrentExecutions?: number;
+  /** Pin a specific version. Omit to track `currentVersionId`. */
+  versionId?: string;
+};
+
+/**
+ * A workflow definition. `handle` is the local folder/filename
+ * identity and gets pushed as the workflow's `name`. `displayName`
+ * (when set) is preserved on the server's `name` field instead — use
+ * it when you want a human-friendly title that differs from a
+ * URL-safe handle.
+ */
+export type Workflow = {
+  /** Folder name + natural key. */
+  handle: string;
+  /** Optional human-friendly display name; defaults to `handle`. */
+  displayName?: string;
+  description?: string;
+  isActive?: boolean;
+  /** Bot user that workflow executions act as for `bridge.graphql` calls. */
+  botUser?: UserRef;
+  defaultNodeTimeoutSeconds?: number;
+  variables?: WorkflowVariable[];
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  triggers?: WorkflowTriggerSpec[];
+};
+
+export function defineWorkflow(spec: Workflow): Tagged<Workflow, "workflow"> {
+  return Object.assign({}, spec, { [KIND_TAG]: "workflow" as const });
 }
 
 // ──────────────────────────────────────────────────────────────────────

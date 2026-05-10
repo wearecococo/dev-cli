@@ -12,6 +12,7 @@ import {
   CUSTOM_APPS_DIR,
   EDGE_APPS_DIR,
   INTEGRATIONS_DIR,
+  WORKFLOWS_DIR,
 } from "../project.ts";
 import {
   printAppManifestTs,
@@ -53,8 +54,8 @@ export type InitOptions = {
   version: string;
   engineVersion?: EngineVersion;
   format?: ManifestFormat;
-  /** "integration" (default) | "app" (custom app) | "edge" (edge app). */
-  type?: "integration" | "app" | "edge";
+  /** "integration" (default) | "app" (custom app) | "edge" (edge app) | "workflow". */
+  type?: "integration" | "app" | "edge" | "workflow";
   /** Custom-app only — defaults to PAGE. */
   appKind?: CustomAppKind;
 };
@@ -63,6 +64,7 @@ export async function runInit(idOrHandle: string, opts: InitOptions): Promise<vo
   const type = opts.type ?? "integration";
   if (type === "app") return runInitCustomApp(idOrHandle, opts);
   if (type === "edge") return runInitEdgeApp(idOrHandle, opts);
+  if (type === "workflow") return runInitWorkflow(idOrHandle, opts);
   return runInitIntegration(idOrHandle, opts);
 }
 
@@ -277,4 +279,54 @@ async function runInitEdgeApp(handle: string, opts: InitOptions): Promise<void> 
   console.log(`Created ${EDGE_APPS_DIR}/${handle}/ (edge app)`);
   console.log(`  ${MANIFEST_TS_FILENAME}`);
   console.log(`  handlers/heartbeat.lua`);
+}
+
+async function runInitWorkflow(handle: string, _opts: InitOptions): Promise<void> {
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(handle)) {
+    throw new Error(
+      `workflow handle must be lowercase alphanumeric with optional hyphens/underscores, got: ${handle}`,
+    );
+  }
+  const target = resolve(process.cwd(), WORKFLOWS_DIR, handle);
+  if (existsSync(target)) {
+    throw new Error(`Folder already exists: ${target}`);
+  }
+  assertDevCliResolvable(process.cwd());
+
+  mkdirSync(target, { recursive: true });
+  writeFileSync(
+    join(target, MANIFEST_TS_FILENAME),
+    `import { defineWorkflow } from "@wearecococo/dev-cli/define";
+
+export default defineWorkflow({
+  handle: "${handle}",
+  displayName: "${humaniseHandle(handle)}",
+  description: "Scaffold workflow for ${handle}.",
+  isActive: false,
+
+  variables: [],
+
+  // Replace with real node + edge definitions. Each node's \`config\`
+  // object is opaque from the CLI's perspective and is validated against
+  // the platform's JSON Schema at push time. Run \`cococo lint\` to
+  // server-validate before pushing.
+  nodes: [
+    { id: "start", name: "Start", type: "trigger", config: {} },
+  ],
+  edges: [],
+
+  // Trigger configs are discriminated on \`kind\`:
+  //   { kind: "scheduled", cronExpression, overlapPolicy, timezone? }
+  //   { kind: "event",     topic, filter?, dataQuery? }
+  //   { kind: "webhook",   path, method, authRequired }
+  //   { kind: "deviceMqtt", topic, deviceId?, filter? }
+  //   { kind: "edgeAppEvent", topic?, controllerId?, edgeAppHandle? }
+  triggers: [],
+});
+`,
+  );
+
+  console.log(`Created ${WORKFLOWS_DIR}/${handle}/ (workflow)`);
+  console.log(`  ${MANIFEST_TS_FILENAME}`);
+  console.log(`Next: edit nodes/edges, then 'cococo push ${handle}'.`);
 }

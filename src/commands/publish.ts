@@ -4,14 +4,17 @@ import {
   createCustomAppVersion,
   findEdgeAppDraft,
   getCustomAppByHandle,
+  getWorkflowByName,
+  listWorkflowVersions,
   publishCustomApp,
   publishDraft,
   publishEdgeAppDraft,
+  setActiveVersion,
   upsertCustomApp,
   validateDraft,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
-import type { LoadedCustomApp, LoadedEdgeApp } from "../loader.ts";
+import type { LoadedCustomApp, LoadedEdgeApp, LoadedWorkflow } from "../loader.ts";
 import { findDefinition, loadLocal } from "./_shared.ts";
 
 /**
@@ -55,6 +58,10 @@ export async function runPublish(
   }
   if (loaded.kind === "edge") {
     await publishEdge(client, loaded);
+    return;
+  }
+  if (loaded.kind === "workflow") {
+    await publishWorkflow(client, loaded);
     return;
   }
   await publishIntegration(client, loaded.manifest.id, loaded.manifest.version);
@@ -151,5 +158,44 @@ async function publishEdge(client: GraphQLClient, loaded: LoadedEdgeApp): Promis
   console.log(
     `${published.handle}: published v${published.version} (${published.id}). ` +
       `Prior PUBLISHED auto-deprecated.`,
+  );
+}
+
+/**
+ * Publish a workflow: flip the workflow's `currentVersionId` pointer
+ * to the most recent version snapshot. Push must have been run first
+ * (it's what creates the version snapshot). If the latest version is
+ * already active, nothing happens.
+ */
+async function publishWorkflow(
+  client: GraphQLClient,
+  loaded: LoadedWorkflow,
+): Promise<void> {
+  const row = await getWorkflowByName(client, loaded.workflow.name);
+  if (!row) {
+    throw new Error(
+      `No workflow found for '${loaded.workflow.handle}'. Run 'cococo push' first.`,
+    );
+  }
+  const versions = await listWorkflowVersions(client, row.id);
+  if (versions.length === 0) {
+    throw new Error(
+      `Workflow ${loaded.workflow.handle} has no versions yet. Run 'cococo push' first.`,
+    );
+  }
+  // Latest version = highest `version` integer.
+  const latest = versions.reduce((a, b) => (a.version > b.version ? a : b));
+  if (row.currentVersionId === latest.id) {
+    console.log(
+      `${loaded.workflow.handle}: already active at v${latest.version} (${latest.id}).`,
+    );
+    return;
+  }
+  const result = await setActiveVersion(client, {
+    workflowId: row.id,
+    versionId: latest.id,
+  });
+  console.log(
+    `${loaded.workflow.handle}: active version → v${latest.version} (${result.id}).`,
   );
 }

@@ -5,7 +5,12 @@ import {
   findEdgeAppDraft,
   getCustomAppByHandle,
   getDefinition,
+  getWorkflowByName,
+  getWorkflowVersion,
   listDefinitions,
+  listWorkflowTriggers,
+  type WorkflowTriggerState,
+  type WorkflowVersionState,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { bundleToFiles } from "../bundle.ts";
@@ -20,11 +25,13 @@ import {
   CUSTOM_APPS_DIR,
   EDGE_APPS_DIR,
   INTEGRATIONS_DIR,
+  WORKFLOWS_DIR,
 } from "../project.ts";
 import {
   printAppManifestTs,
   printEdgeAppManifestTs,
   printManifestTs,
+  printWorkflowManifestTs,
 } from "../printer.ts";
 import { extractManifestSources } from "../sources.ts";
 
@@ -32,8 +39,8 @@ export type PullOptions = {
   version?: string;
   force: boolean;
   format?: ManifestFormat;
-  /** "integration" (default) | "app" (custom app working copy) | "edge" (edge-app DRAFT). */
-  type?: "integration" | "app" | "edge";
+  /** "integration" (default) | "app" | "edge" | "workflow". */
+  type?: "integration" | "app" | "edge" | "workflow";
 };
 
 export async function runPull(
@@ -49,6 +56,9 @@ export async function runPull(
   }
   if (type === "edge") {
     return runPullEdgeApp(client, idOrHandle, opts);
+  }
+  if (type === "workflow") {
+    return runPullWorkflow(client, idOrHandle, opts);
   }
 
   const integrationId = idOrHandle;
@@ -265,6 +275,53 @@ async function runPullEdgeApp(
   console.log(
     `Pulled edge app ${remote.handle} into ${EDGE_APPS_DIR}/${remote.handle}/ ` +
       `(${fileCount} file(s); ${remote.status} v${remote.version})`,
+  );
+}
+
+async function runPullWorkflow(
+  client: GraphQLClient,
+  handle: string,
+  opts: PullOptions,
+): Promise<void> {
+  const row = await getWorkflowByName(client, handle);
+  if (!row) throw new Error(`No workflow found with handle '${handle}'.`);
+
+  // Pull the active version (or whatever's pinned). Without an active
+  // version, the workflow has been pushed but never published — we
+  // refuse to pull because there's no canonical state to dump.
+  const versionId = row.currentVersionId;
+  if (!versionId) {
+    throw new Error(
+      `Workflow '${handle}' has no active version yet. Push and publish first, ` +
+        `or pull a specific version via the dashboard.`,
+    );
+  }
+  const version = await getWorkflowVersion(client, versionId);
+  const triggers = await listWorkflowTriggers(client, row.id);
+
+  const target = resolve(process.cwd(), WORKFLOWS_DIR, handle);
+  if (existsSync(target) && readdirSync(target).length > 0 && !opts.force) {
+    throw new Error(`${target} already exists and is not empty. Use --force to overwrite.`);
+  }
+  mkdirSync(target, { recursive: true });
+
+  writeFileSync(
+    join(target, MANIFEST_TS_FILENAME),
+    printWorkflowManifestTs({
+      handle,
+      displayName: row.name === handle ? undefined : row.name,
+      description: row.description ?? undefined,
+      isActive: row.isActive,
+      defaultNodeTimeoutSeconds: row.defaultNodeTimeoutSeconds ?? undefined,
+      botUserEmail: undefined, // resolved on dump-equivalent only via id→email lookup; deferred
+      version,
+      triggers,
+    }),
+  );
+
+  console.log(
+    `Pulled workflow ${handle} into ${WORKFLOWS_DIR}/${handle}/ ` +
+      `(active v${version.version}, ${triggers.length} trigger(s))`,
   );
 }
 

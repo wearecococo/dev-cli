@@ -19,6 +19,7 @@ export type IntegrationFolder = {
 export const INTEGRATIONS_DIR = "integrations";
 export const CUSTOM_APPS_DIR = "custom_apps";
 export const EDGE_APPS_DIR = "edge_apps";
+export const WORKFLOWS_DIR = "workflows";
 
 /**
  * Resolve a folder argument from the user's cwd to a manifest folder.
@@ -41,6 +42,7 @@ export function resolveIntegrationFolder(arg: string | undefined): IntegrationFo
     candidates.push(resolve(cwd, INTEGRATIONS_DIR, arg));
     candidates.push(resolve(cwd, CUSTOM_APPS_DIR, arg));
     candidates.push(resolve(cwd, EDGE_APPS_DIR, arg));
+    candidates.push(resolve(cwd, WORKFLOWS_DIR, arg));
     candidates.push(resolve(cwd, arg));
   }
 
@@ -65,7 +67,7 @@ export function resolveIntegrationFolder(arg: string | undefined): IntegrationFo
 export function listAllArtifactFolders(repoRoot?: string): string[] {
   const root = repoRoot ?? process.cwd();
   const out: string[] = [];
-  for (const dir of [INTEGRATIONS_DIR, CUSTOM_APPS_DIR, EDGE_APPS_DIR]) {
+  for (const dir of [INTEGRATIONS_DIR, CUSTOM_APPS_DIR, EDGE_APPS_DIR, WORKFLOWS_DIR]) {
     const abs = resolve(root, dir);
     if (!existsSync(abs)) continue;
     const entries = readdirSync(abs).sort();

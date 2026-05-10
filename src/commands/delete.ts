@@ -7,6 +7,8 @@ import {
   deleteNetwork,
   deleteTeam,
   deleteUser,
+  deleteWorkflow,
+  getWorkflowByName,
   detachCustomAppTeam,
   detachCustomAppUser,
   detachPolicy,
@@ -37,7 +39,8 @@ export type DeleteKind =
   | "custom-app-team-binding"
   | "controller"
   | "controller-token"
-  | "edge-app-installation";
+  | "edge-app-installation"
+  | "workflow";
 
 /**
  * Remove a tenant-IAM resource from the platform. The flat ops files
@@ -132,11 +135,29 @@ export async function runDelete(
     await deleteInstallation(client, args[0]!, args[1]!, parseInt(args[2]!, 10));
     return;
   }
+  if (kind === "workflow") {
+    if (args.length !== 1) {
+      throw new Error(`cococo delete workflow <handle> — got ${args.length} arg(s).`);
+    }
+    await deleteWorkflowByHandle(client, args[0]!);
+    return;
+  }
   throw new Error(
     `cococo delete: unknown kind '${kind}'. Use user | policy | iam-policy-binding | ` +
       `network | device | team | team-member | custom-app-user-binding | ` +
-      `custom-app-team-binding | controller | controller-token | edge-app-installation.`,
+      `custom-app-team-binding | controller | controller-token | edge-app-installation | workflow.`,
   );
+}
+
+async function deleteWorkflowByHandle(client: GraphQLClient, handle: string): Promise<void> {
+  const workflow = await getWorkflowByName(client, handle);
+  if (!workflow) {
+    console.log(`No workflow found with handle '${handle}'.`);
+    return;
+  }
+  await deleteWorkflow(client, workflow.id);
+  console.log(`Deleted workflow ${handle} (${workflow.id}).`);
+  console.log(`  Remember to remove the local workflows/${handle}/ folder if you keep it in git.`);
 }
 
 async function deleteUserByEmail(client: GraphQLClient, email: string): Promise<void> {

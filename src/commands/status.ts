@@ -34,6 +34,13 @@ export async function runStatus(
     await statusEdgeApp(client, loaded);
     return;
   }
+  if (loaded.kind === "workflow") {
+    console.log(
+      `${loaded.workflow.handle}: workflow status diff is not yet implemented. ` +
+        `Use 'cococo lint' to validate the definition or 'cococo push' to snapshot a new version.`,
+    );
+    return;
+  }
   await statusIntegration(client, folder, loaded);
 }
 

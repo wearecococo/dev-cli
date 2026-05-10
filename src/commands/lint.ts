@@ -1,6 +1,7 @@
 import { createClient, type GraphQLClient } from "../graphql/client.ts";
 import {
   validateLua,
+  validateWorkflowDefinition,
   type LuaDiagnostic,
   type LuaSeverity,
 } from "../graphql/operations.ts";
@@ -32,6 +33,23 @@ export async function runLint(
   opts: LintOptions,
   overrides: ConfigOverrides,
 ): Promise<void> {
+  // Workflows lint via `validateWorkflow` instead of the per-chunk Lua
+  // pipeline — the server checks the whole definition against the
+  // platform's JSON Schema in one call.
+  const folder = resolveIntegrationFolder(folderArg);
+  const loaded = await loadManifest(folder.path);
+  if (loaded.kind === "workflow") {
+    const client = createClient(loadConfig(overrides));
+    const result = await validateWorkflowDefinition(client, loaded.workflow.definition);
+    if (result.isValid) {
+      console.log(`${loaded.workflow.handle}: workflow definition valid.`);
+      return;
+    }
+    console.error(`${loaded.workflow.handle}: workflow definition invalid.`);
+    for (const e of result.errors) console.error(`  ${e.path}: ${e.message}`);
+    process.exit(1);
+  }
+
   const findings = await runLintFindings(folderArg, opts, overrides);
 
   if (findings.length === 0) {
