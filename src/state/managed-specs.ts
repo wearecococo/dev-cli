@@ -32,6 +32,7 @@ import {
   type EdgeAppInstallation,
   type IAMPolicy,
   type IAMPolicyBinding,
+  type IntegrationInstallation,
   type Network,
   type Team,
   type User,
@@ -67,6 +68,8 @@ export function managedSpecFromDeclared(
       return controllerTokenToManaged(spec as ControllerToken);
     case "edge_app_installation":
       return edgeAppInstallationToManaged(spec as EdgeAppInstallation);
+    case "integration_installation":
+      return integrationInstallationToManaged(spec as IntegrationInstallation);
   }
 }
 
@@ -97,6 +100,8 @@ export function managedSpecFromLive(
       return liveControllerTokenToManaged(live as LiveControllerToken);
     case "edge_app_installation":
       return liveEdgeAppInstallationToManaged(live as LiveEdgeAppInstallation);
+    case "integration_installation":
+      return liveIntegrationInstallationToManaged(live as LiveIntegrationInstallation);
   }
 }
 
@@ -204,6 +209,19 @@ function controllerTokenToManaged(t: ControllerToken): ManagedSpec {
     name: t.name,
     description: t.description,
     expiresAt: t.expiresAt,
+  });
+}
+
+function integrationInstallationToManaged(i: IntegrationInstallation): ManagedSpec {
+  return compact({
+    integration: i.integration,
+    name: i.name,
+    version: i.version,
+    description: i.description,
+    isActive: i.isActive,
+    botUser: i.botUser !== undefined ? userEmail(i.botUser).toLowerCase() : undefined,
+    config: i.config,
+    bindings: i.bindings,
   });
 }
 
@@ -370,6 +388,32 @@ function liveControllerTokenToManaged(t: LiveControllerToken): ManagedSpec {
     name: t.name,
     description: t.description ?? undefined,
     expiresAt: t.expiresAt ?? undefined,
+  });
+}
+
+type LiveIntegrationInstallation = {
+  integrationId: string;
+  name: string;
+  description?: string | null;
+  version: string;
+  status: "ACTIVE" | "PAUSED" | "ERROR" | "UPGRADING";
+  botUserEmail?: string | null;
+  config?: Record<string, unknown> | null;
+  bindings?: Record<string, string> | null;
+};
+function liveIntegrationInstallationToManaged(i: LiveIntegrationInstallation): ManagedSpec {
+  return compact({
+    integration: i.integrationId,
+    name: i.name,
+    version: i.version,
+    description: i.description ?? undefined,
+    // Map runtime status back to declared isActive so a state-tracking
+    // workspace can detect drift if the operator paused the install
+    // out-of-band.
+    isActive: i.status === "ACTIVE",
+    botUser: i.botUserEmail ? i.botUserEmail.toLowerCase() : undefined,
+    config: i.config ?? undefined,
+    bindings: i.bindings ?? undefined,
   });
 }
 

@@ -519,4 +519,58 @@ export default defineEdgeAppInstallations([
       /Duplicate edge-app installation a on c.*Only one version/,
     );
   });
+
+  test("loads integration installations", async () => {
+    writeFileSync(
+      join(root, "integration_installations.ts"),
+      `import { defineIntegrationInstallations } from "${DEFINE_PATH}";
+export default defineIntegrationInstallations([
+  {
+    integration: "com.acme.orders",
+    name: "production",
+    version: "1.4.0",
+    config: { batchSize: 100 },
+    bindings: { ordersDb: "press-01" },
+    isActive: true,
+  },
+]);
+`,
+    );
+    const ops = await loadOps(root);
+    expect(ops.integrationInstallations).toHaveLength(1);
+    expect(ops.integrationInstallations[0]!.integration).toBe("com.acme.orders");
+    expect(ops.integrationInstallations[0]!.name).toBe("production");
+    expect(ops.integrationInstallations[0]!.version).toBe("1.4.0");
+    expect(ops.integrationInstallations[0]!.config).toEqual({ batchSize: 100 });
+    expect(ops.integrationInstallations[0]!.bindings).toEqual({ ordersDb: "press-01" });
+  });
+
+  test("rejects two integration installs with the same (integration, name)", async () => {
+    writeFileSync(
+      join(root, "integration_installations.ts"),
+      `import { defineIntegrationInstallations } from "${DEFINE_PATH}";
+export default defineIntegrationInstallations([
+  { integration: "com.acme.orders", name: "production", version: "1.0.0" },
+  { integration: "com.acme.orders", name: "production", version: "1.1.0" },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(
+      /Duplicate integration installation com.acme.orders 'production'/,
+    );
+  });
+
+  test("allows two installs of the same integration under different names", async () => {
+    writeFileSync(
+      join(root, "integration_installations.ts"),
+      `import { defineIntegrationInstallations } from "${DEFINE_PATH}";
+export default defineIntegrationInstallations([
+  { integration: "com.acme.orders", name: "production", version: "1.0.0" },
+  { integration: "com.acme.orders", name: "staging",    version: "1.1.0" },
+]);
+`,
+    );
+    const ops = await loadOps(root);
+    expect(ops.integrationInstallations).toHaveLength(2);
+  });
 });

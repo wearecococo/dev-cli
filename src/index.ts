@@ -339,6 +339,7 @@ state
       "controller",
       "controller-token",
       "edge-app-installation",
+      "integration-installation",
     ];
     if (!allowed.includes(kind as ForgetKind)) {
       throw new Error(
@@ -423,6 +424,7 @@ program
       "controller-token",
       "edge-app-installation",
       "workflow",
+      "integration-installation",
     ] as const;
     if (!allowed.includes(kind as (typeof allowed)[number])) {
       throw new Error(

@@ -17,6 +17,7 @@ const emptyOps: LoadedOps = {
   controllers: [],
   controllerTokens: [],
   edgeAppInstallations: [],
+  integrationInstallations: [],
 };
 
 function withUsers(...users: LoadedOps["users"]): LoadedOps {

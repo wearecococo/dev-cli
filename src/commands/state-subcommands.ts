@@ -103,7 +103,8 @@ export type ForgetKind =
   | "custom-app-team-binding"
   | "controller"
   | "controller-token"
-  | "edge-app-installation";
+  | "edge-app-installation"
+  | "integration-installation";
 
 export async function runStateForget(
   kind: ForgetKind,
@@ -178,6 +179,9 @@ function parseForgetIdentity(kind: ForgetKind, args: string[]): ResourceIdentity
     case "edge-app-installation":
       requireArgs(kind, args, 2);
       return { kind: "edge_app_installation", controllerHandle: args[0]!, appHandle: args[1]! };
+    case "integration-installation":
+      requireArgs(kind, args, 2);
+      return { kind: "integration_installation", integration: args[0]!, name: args[1]! };
   }
 }
 

@@ -6,6 +6,13 @@ import {
   attachPolicy,
   createControllerToken,
   createIAMPolicy,
+  createIntegrationInstance,
+  deleteIntegrationInstance,
+  getIntegrationInstanceByName,
+  pauseIntegrationInstance,
+  startIntegrationInstance,
+  updateIntegrationInstance,
+  upgradeIntegrationInstance,
   getControllerByHandle,
   getControllerPolicyByController,
   getCustomAppByHandle,
@@ -43,6 +50,7 @@ import {
   type Device,
   type EdgeAppInstallation,
   type IAMPolicy,
+  type IntegrationInstallation,
   type IAMPolicyBinding,
   type Network,
   type Team,
@@ -81,6 +89,7 @@ import {
   deleteEdgeAppInstallation as deleteInstallationMutation,
 } from "../graphql/operations.ts";
 import { promptStrictYes, promptYes } from "../prompt.ts";
+import { findDefinition } from "./_shared.ts";
 
 export type ManagedApplyOptions = {
   yes: boolean;
@@ -377,6 +386,11 @@ function lookupDeclared(
           controllerHandle(i.controller) === identity.controllerHandle &&
           i.app === identity.appHandle,
       );
+    case "integration_installation":
+      return ops.integrationInstallations.find(
+        (i) =>
+          i.integration === identity.integration && i.name === identity.name,
+      );
   }
 }
 
@@ -617,6 +631,70 @@ async function executeUpsert(
       }
       return { spec: managedSpecFromDeclared("edge_app_installation", i) };
     }
+    case "integration_installation": {
+      const i = declared as IntegrationInstallation;
+      const def = await findDefinition(ctx.client, i.integration, i.version);
+      if (!def) {
+        throw new Error(
+          `Integration '${i.integration}' v${i.version} not found on the server.`,
+        );
+      }
+      if (def.status === "DRAFT") {
+        throw new Error(
+          `Integration '${i.integration}' v${i.version} is DRAFT — installations must pin a published version.`,
+        );
+      }
+      let botUserId: string | undefined;
+      if (i.botUser !== undefined) {
+        botUserId = await resolveUserId(ctx, userEmail(i.botUser));
+      }
+      const configJson = JSON.stringify(i.config ?? {});
+      const bindingsJson = JSON.stringify(i.bindings ?? {});
+      const existing = await getIntegrationInstanceByName(ctx.client, i.integration, i.name);
+      let result;
+      if (!existing) {
+        result = await createIntegrationInstance(ctx.client, {
+          name: i.name,
+          definitionId: def.id,
+          config: configJson,
+          bindings: bindingsJson,
+          description: i.description,
+          botUserId,
+        });
+      } else if (existing.definitionId === def.id) {
+        result = await updateIntegrationInstance(ctx.client, {
+          id: existing.id,
+          name: i.name,
+          description: i.description,
+          config: configJson,
+          bindings: bindingsJson,
+          botUserId: botUserId ?? null,
+        });
+      } else {
+        await upgradeIntegrationInstance(ctx.client, {
+          id: existing.id,
+          toDefinitionId: def.id,
+          bindings: bindingsJson,
+          configOverrides: configJson,
+        });
+        result = await updateIntegrationInstance(ctx.client, {
+          id: existing.id,
+          name: i.name,
+          description: i.description,
+          config: configJson,
+          bindings: bindingsJson,
+          botUserId: botUserId ?? null,
+        });
+      }
+      const desiredActive = i.isActive !== false;
+      const currentActive = result.status === "ACTIVE";
+      if (desiredActive && !currentActive) {
+        await startIntegrationInstance(ctx.client, result.id);
+      } else if (!desiredActive && currentActive) {
+        await pauseIntegrationInstance(ctx.client, result.id);
+      }
+      return { spec: managedSpecFromDeclared("integration_installation", i) };
+    }
   }
 }
 
@@ -664,6 +742,16 @@ async function executeDelete(
       const match = installs.find((i) => i.edgeApp?.handle === identity.appHandle);
       if (!match) return;
       await deleteInstallationMutation(client, match.id);
+      return;
+    }
+    case "integration_installation": {
+      const inst = await getIntegrationInstanceByName(
+        client,
+        identity.integration,
+        identity.name,
+      );
+      if (!inst) return;
+      await deleteIntegrationInstance(client, inst.id);
       return;
     }
   }

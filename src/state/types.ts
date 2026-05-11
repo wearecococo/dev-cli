@@ -21,7 +21,8 @@ export type ResourceKind =
   | "custom_app_team_binding"
   | "controller"
   | "controller_token"
-  | "edge_app_installation";
+  | "edge_app_installation"
+  | "integration_installation";
 
 export type ResourceIdentity =
   | { kind: "user"; email: string }
@@ -34,7 +35,8 @@ export type ResourceIdentity =
   | { kind: "custom_app_team_binding"; teamName: string; appHandle: string }
   | { kind: "controller"; handle: string }
   | { kind: "controller_token"; controllerHandle: string; name: string }
-  | { kind: "edge_app_installation"; controllerHandle: string; appHandle: string };
+  | { kind: "edge_app_installation"; controllerHandle: string; appHandle: string }
+  | { kind: "integration_installation"; integration: string; name: string };
 
 export type ManagedResource = {
   identity: ResourceIdentity;
@@ -91,6 +93,10 @@ export function identityKey(identity: ResourceIdentity): string {
       // (controller, app) — version intentionally not part of the key,
       // because install-upgrade replaces older versions in place.
       return `edge_app_installation:${norm(identity.controllerHandle)}:${norm(identity.appHandle)}`;
+    case "integration_installation":
+      // (integration, name) — version not part of the key for the
+      // same reason: upgrades re-pin the definition in place.
+      return `integration_installation:${norm(identity.integration)}:${norm(identity.name)}`;
   }
 }
 
@@ -122,6 +128,8 @@ export function identityLabel(identity: ResourceIdentity): string {
       return `${identity.controllerHandle}/${identity.name}`;
     case "edge_app_installation":
       return `${identity.controllerHandle}/${identity.appHandle}`;
+    case "integration_installation":
+      return `${identity.integration}/${identity.name}`;
   }
 }
 
@@ -146,4 +154,5 @@ export const KIND_FORWARD_ORDER: ResourceKind[] = [
   "controller",
   "controller_token",
   "edge_app_installation",
+  "integration_installation",
 ];

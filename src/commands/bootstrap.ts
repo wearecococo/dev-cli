@@ -286,6 +286,20 @@ const OPS_STUBS: Array<[string, string]> = [
   // },`,
     ),
   ],
+  [
+    "integration_installations.ts",
+    stub(
+      "defineIntegrationInstallations",
+      `// {
+  //   integration: "com.acme.orders",
+  //   name: "production",                  // (integration, name) is the natural key
+  //   version: "1.4.0",                    // pinned to a published definition
+  //   config: { batchSize: 100 },          // matches the integration's config_schema.json
+  //   bindings: { ordersDb: "press-erp" }, // maps resources[].id → tenant resource
+  //   isActive: true,
+  // },`,
+    ),
+  ],
 ];
 
 function stub(fn: string, exampleBody: string): string {

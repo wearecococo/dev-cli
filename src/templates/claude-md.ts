@@ -45,6 +45,7 @@ custom_app_team_bindings.ts       # which team can see which custom app
 controllers.ts                    # bridge boxes (with inline IO/exec policy)
 controller_tokens.ts              # auth bundles for the bridge
 edge_app_installations.ts         # pin (controller, edge-app, version)
+integration_installations.ts      # install integrations on the tenant ((integration, name) pairs)
 \`\`\`
 
 Each one default-exports the result of a \`defineX(…)\` helper from
@@ -90,6 +91,12 @@ bunx cococo list                                              # what's on the se
 - **Upgrading an edge-app install on a controller:** bump \`version\`
   in \`edge_app_installations.ts\` and re-apply. The CLI detects the
   older install and calls \`upgradeEdgeAppInstallation\` for you.
+- **Installing a published integration on the tenant:** add an entry
+  to \`integration_installations.ts\` with \`{ integration, name,
+  version, config, bindings, isActive }\`. \`config\` is validated
+  against the integration's \`config_schema.json\` and \`bindings\`
+  against its declared \`resources\` before the mutation. Upgrades
+  via the same mechanism as edge apps — bump \`version\` and re-apply.
 
 ## Apply: additive vs state-tracking
 

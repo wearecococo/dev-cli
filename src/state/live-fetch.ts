@@ -16,6 +16,7 @@ import {
   getCustomAppByHandle,
   getDeviceByIdentifier,
   getIAMPolicy,
+  getIntegrationInstanceByName,
   getNetworkByName,
   getTeamByName,
   getTeamMembers,
@@ -271,6 +272,32 @@ async function fetchOne(
         variables: match.variables,
       });
     }
+    case "integration_installation": {
+      const inst = await getIntegrationInstanceByName(client, id.integration, id.name);
+      if (!inst) return null;
+      const botUserEmail = inst.botUserId
+        ? (await ctx.userEmailById()).get(inst.botUserId) ?? null
+        : null;
+      // config + bindings come back as JSON strings; parse for diffing.
+      const parseMaybe = (s: string | null | undefined): Record<string, unknown> | null => {
+        if (!s) return null;
+        try {
+          return JSON.parse(s) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      };
+      return managedSpecFromLive("integration_installation", {
+        integrationId: inst.integrationId,
+        name: inst.name,
+        description: inst.description,
+        version: inst.version,
+        status: inst.status,
+        botUserEmail,
+        config: parseMaybe(inst.config),
+        bindings: parseMaybe(inst.bindings) as Record<string, string> | null,
+      });
+    }
   }
 }
 
@@ -323,6 +350,13 @@ function collectIdentities(
       kind: "edge_app_installation",
       controllerHandle: controllerHandle(i.controller),
       appHandle: i.app,
+    });
+  }
+  for (const i of declared.integrationInstallations) {
+    add({
+      kind: "integration_installation",
+      integration: i.integration,
+      name: i.name,
     });
   }
 

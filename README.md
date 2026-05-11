@@ -54,6 +54,7 @@ flat per-kind files at the repo root, applied with `cococo apply`:
 | `controllers.ts` | Bridge boxes (with inline IO/exec policy) |
 | `controller_tokens.ts` | Auth bundles for the bridge |
 | `edge_app_installations.ts` | Pin a specific edge-app version to a controller |
+| `integration_installations.ts` | Install a published integration on the tenant (`(integration, name)` pairs with per-install config, bindings, active/paused) |
 
 **Platform extensions** — the things you build *on top of* cococo.
 Each one is its own folder, pushed individually with `cococo push` and
@@ -115,6 +116,7 @@ afterwards to keep apply consistent.
 | Controller `policy` (inline) | **Reconciled** — both allowlists wholesale-replaced |
 | Controller tokens | **Create-only with existence check** — non-revoked `(controller, name)` skips; missing ones get minted, connect bundle prints once |
 | Edge-app installations | **Smart upsert** — exact-version match updates variables; older version of the same handle on the same controller triggers `upgrade`; otherwise creates fresh |
+| Integration installations | **Smart upsert + lifecycle** — exact-version match updates config/bindings; different version of the same `(integration, name)` triggers `upgrade` then `update`; otherwise creates. `isActive` drives `start`/`pause` after the write. `config` and `bindings` validated locally against the integration's `config_schema.json` and declared `resources` before the mutation |
 
 When in doubt, `cococo dump all -f` shows you what's actually on the
 server vs. what you've declared.
@@ -1326,6 +1328,67 @@ baseline (newer server, tenant-specific custom nodes). When that
 happens, run `cococo update` to write workspace overrides into
 `.cococo/generated/node-types.d.ts`; add `cococo update --check` to
 your CI to catch stale workspace files.
+
+### Installing integrations on the tenant
+
+Pushing/publishing an integration uploads the *definition*; running
+it on the tenant requires an **installation**. Declare these in
+`integration_installations.ts` at the repo root:
+
+```ts
+import { defineIntegrationInstallations } from "@wearecococo/dev-cli/define";
+
+export default defineIntegrationInstallations([
+  {
+    integration: "com.acme.orders",
+    name: "production",                // (integration, name) is the natural key
+    version: "1.4.0",                  // pin to a published definition
+    config: {                          // shape comes from integrations/<handle>/config_schema.json
+      batchSize: 100,
+      pollEvery: 60,
+    },
+    bindings: {                        // maps integration `resources[].id` → tenant resource
+      ordersDb: "press-erp",
+    },
+    botUser: "ops-bot@acme.com",
+    isActive: true,                    // false ⇒ install but pause
+  },
+  // Same integration, different name — a separate instance with
+  // its own config + state:
+  {
+    integration: "com.acme.orders",
+    name: "staging",
+    version: "1.4.0",
+    config: { batchSize: 10, pollEvery: 300 },
+    bindings: { ordersDb: "press-erp-staging" },
+    isActive: false,
+  },
+]);
+```
+
+`cococo apply` then handles the lifecycle:
+
+- **Exact `(integration, version)` match exists** → updates config /
+  bindings / description / botUser in place.
+- **`(integration, name)` exists at a different version** → calls
+  `upgrade` to re-pin the definition, then `update` to land the new
+  config/bindings.
+- **Doesn't exist** → creates fresh.
+- **`isActive` differs from runtime state** → calls `start` or
+  `pause` after the write.
+
+Before mutating, apply **validates locally** against the integration's
+published manifest:
+
+- All non-optional `resources[].id`s have a binding.
+- No bindings reference unknown resource ids.
+- `config` only contains keys declared in `config_schema.json`'s
+  `properties`, and all `required` keys are present.
+
+Clear up-front errors beat opaque server-validation failures. Remove
+an installation by dropping the row + running `cococo delete
+integration-installation <integration> <name>` (or, in state-tracking
+mode, simply remove the row and re-apply with `--allow-destroy`).
 
 ### Streaming logs
 

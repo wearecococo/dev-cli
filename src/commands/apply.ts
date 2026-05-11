@@ -9,11 +9,14 @@ import {
   attachPolicy,
   createControllerToken,
   createIAMPolicy,
+  createIntegrationInstance,
   getControllerByHandle,
   getControllerPolicyByController,
   getCustomAppByHandle,
+  getDefinition,
   getDeviceByIdentifier,
   getIAMPolicy,
+  getIntegrationInstanceByName,
   getNetworkByName,
   getTeamByName,
   getTeamMembers,
@@ -23,10 +26,14 @@ import {
   listCustomAppUsers,
   listEdgeAppInstallations,
   listUserPolicies,
+  pauseIntegrationInstance,
   removeTeamMember,
   resolveEdgeAppByHandleAndVersion,
+  startIntegrationInstance,
   updateIAMPolicy,
+  updateIntegrationInstance,
   upgradeEdgeAppInstallation,
+  upgradeIntegrationInstance,
   upsertController,
   upsertControllerPolicy,
   upsertDevice,
@@ -45,6 +52,7 @@ import {
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { loadOps, type LoadedOps } from "../ops.ts";
+import { findDefinition } from "./_shared.ts";
 import {
   controllerHandle,
   iamPolicyHandle,
@@ -58,6 +66,7 @@ import {
   type Device,
   type EdgeAppInstallation,
   type IAMPolicy,
+  type IntegrationInstallation,
   type IAMPolicyBinding,
   type InboundProtocol,
   type Network,
@@ -99,7 +108,7 @@ export async function runApply(
       `No ops files found in ${process.cwd()}. Expected one of: ` +
         `users.ts, iam_policies.ts, iam_policy_bindings.ts, networks.ts, devices.ts, ` +
         `teams.ts, custom_app_user_bindings.ts, custom_app_team_bindings.ts, ` +
-        `controllers.ts, controller_tokens.ts, edge_app_installations.ts.`,
+        `controllers.ts, controller_tokens.ts, edge_app_installations.ts, integration_installations.ts.`,
     );
     return;
   }
@@ -115,6 +124,12 @@ export async function runApply(
   await applyCustomAppTeamBindings(client, ops.customAppTeamBindings, teamsByName, ops);
   const controllersByHandle = await applyControllers(client, ops.controllers, networksByName);
   await applyControllerTokens(client, ops.controllerTokens, controllersByHandle, ops);
+  await applyIntegrationInstallations(
+    client,
+    ops.integrationInstallations,
+    usersByEmail,
+    ops,
+  );
   await applyEdgeAppInstallations(
     client,
     ops.edgeAppInstallations,
@@ -870,6 +885,209 @@ async function resolveControllerId(
   return remote.id;
 }
 
+/**
+ * Apply integration installations. Smart upsert keyed by
+ * `(integration, name)`:
+ *
+ *  1. Resolve `(integration, version)` to a server-side ACTIVE
+ *     `IntegrationDefinition`. DRAFT versions are rejected at this
+ *     boundary because installations must pin a published release.
+ *  2. Look up an existing instance for `(integrationId, name)`.
+ *  3. If the existing instance pins the same definition, update its
+ *     config / bindings / description / botUser in place.
+ *  4. If it pins a *different* definition (older version of the same
+ *     integration handle), call `upgrade` first to re-pin the
+ *     definition, then `update` to land the latest config + bindings.
+ *  5. If no instance exists, create one.
+ *  6. After create/update/upgrade, drive runtime state to match
+ *     `isActive` — true ⇒ START, false ⇒ PAUSE — if it isn't already
+ *     there.
+ *
+ * `config` and `bindings` are validated against the integration's
+ * server-stored `bundle.configSchema` and `manifest.resources` BEFORE
+ * the network mutation — clear errors up front instead of opaque
+ * server validation failures.
+ */
+async function applyIntegrationInstallations(
+  client: GraphQLClient,
+  installs: IntegrationInstallation[],
+  usersByEmail: Map<string, UserState>,
+  ops: LoadedOps,
+): Promise<void> {
+  for (const i of installs) {
+    const def = await findDefinition(client, i.integration, i.version);
+    if (!def) {
+      throw new Error(
+        `Integration '${i.integration}' v${i.version} doesn't exist on the server. ` +
+          `Push and publish the integration first.`,
+      );
+    }
+    if (def.status === "DRAFT") {
+      throw new Error(
+        `Integration '${i.integration}' v${i.version} is still DRAFT — installations ` +
+          `must pin an ACTIVE or DEPRECATED definition. Run 'cococo publish ${i.integration}' first.`,
+      );
+    }
+
+    // Fetch the bundle so we can validate config + bindings locally
+    // before hitting the create/update mutation.
+    const full = await getDefinition(client, def.id);
+    if (full.bundle) {
+      validateInstallAgainstDefinition(i, full.bundle);
+    }
+
+    let botUserId: string | undefined;
+    if (i.botUser !== undefined) {
+      const email = userEmail(i.botUser);
+      const local = usersByEmail.get(email);
+      const user = local ?? (await getUserByEmail(client, email));
+      if (!user) {
+        throw new Error(
+          `Installation ${i.integration}/${i.name} references botUser '${email}' ` +
+            `that doesn't exist locally or on the server.`,
+        );
+      }
+      botUserId = user.id;
+    }
+
+    const existing = await getIntegrationInstanceByName(client, i.integration, i.name);
+    const configJson = JSON.stringify(i.config ?? {});
+    const bindingsJson = JSON.stringify(i.bindings ?? {});
+
+    let result;
+    let action: "+" | "~" | "↑";
+    if (!existing) {
+      result = await createIntegrationInstance(client, {
+        name: i.name,
+        definitionId: def.id,
+        config: configJson,
+        bindings: bindingsJson,
+        description: i.description,
+        botUserId,
+      });
+      action = "+";
+    } else if (existing.definitionId === def.id) {
+      result = await updateIntegrationInstance(client, {
+        id: existing.id,
+        name: i.name,
+        description: i.description,
+        config: configJson,
+        bindings: bindingsJson,
+        botUserId: botUserId ?? null,
+      });
+      action = "~";
+    } else {
+      // Pinned to a different definition — upgrade first, then update
+      // so the latest config/bindings/description land.
+      await upgradeIntegrationInstance(client, {
+        id: existing.id,
+        toDefinitionId: def.id,
+        bindings: bindingsJson,
+        configOverrides: configJson,
+      });
+      result = await updateIntegrationInstance(client, {
+        id: existing.id,
+        name: i.name,
+        description: i.description,
+        config: configJson,
+        bindings: bindingsJson,
+        botUserId: botUserId ?? null,
+      });
+      action = "↑";
+    }
+
+    const desiredActive = i.isActive !== false; // default true
+    const currentActive = result.status === "ACTIVE";
+    if (desiredActive && !currentActive) {
+      await startIntegrationInstance(client, result.id);
+    } else if (!desiredActive && currentActive) {
+      await pauseIntegrationInstance(client, result.id);
+    }
+
+    const stateNote = desiredActive ? "active" : "paused";
+    if (action === "↑") {
+      console.log(`  install ↑ ${i.integration}/${i.name} → v${i.version} (${stateNote})`);
+    } else {
+      console.log(`  install ${action} ${i.integration}/${i.name}@v${i.version} (${stateNote})`);
+    }
+  }
+}
+
+/**
+ * Validate a declared installation's `config` and `bindings` against
+ * the integration's published definition before sending to the
+ * server. Surfaces missing required bindings, unknown binding keys,
+ * and (when a configSchema is present) config-shape mismatches at
+ * the top level. Deeper config validation is delegated to the
+ * server — it's the JSON-Schema authority.
+ */
+function validateInstallAgainstDefinition(
+  install: IntegrationInstallation,
+  bundle: { manifest?: unknown; configSchema?: string | null },
+): void {
+  const manifest = bundle.manifest as
+    | { resources?: Array<{ id: string; type?: string; optional?: boolean }> | null }
+    | undefined;
+
+  // bindings ↔ resources
+  const resources = manifest?.resources ?? [];
+  const declared = install.bindings ?? {};
+  const declaredKeys = new Set(Object.keys(declared));
+  const requiredKeys = resources
+    .filter((r) => !r.optional)
+    .map((r) => r.id);
+  const knownKeys = new Set(resources.map((r) => r.id));
+
+  const missing = requiredKeys.filter((k) => !declaredKeys.has(k) || !declared[k]);
+  if (missing.length > 0) {
+    throw new Error(
+      `Integration installation ${install.integration}/${install.name}: ` +
+        `missing required binding(s): ${missing.join(", ")}. ` +
+        `The integration declares these resources as non-optional.`,
+    );
+  }
+  const unknown = [...declaredKeys].filter((k) => !knownKeys.has(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Integration installation ${install.integration}/${install.name}: ` +
+        `unknown binding key(s): ${unknown.join(", ")}. ` +
+        `Valid keys (from resources[].id): ${[...knownKeys].join(", ") || "(none)"}.`,
+    );
+  }
+
+  // config ↔ configSchema (lightweight check: required + property names)
+  if (bundle.configSchema) {
+    let schema: Record<string, unknown>;
+    try {
+      schema = JSON.parse(bundle.configSchema) as Record<string, unknown>;
+    } catch {
+      return; // not parseable — let the server reject if it cares
+    }
+    const config = install.config ?? {};
+    const properties = (schema.properties as Record<string, unknown>) ?? {};
+    const required = (schema.required as string[]) ?? [];
+    const missingCfg = required.filter((k) => !(k in config));
+    if (missingCfg.length > 0) {
+      throw new Error(
+        `Integration installation ${install.integration}/${install.name}: ` +
+          `missing required config field(s): ${missingCfg.join(", ")}. ` +
+          `Declared in config_schema.json's 'required'.`,
+      );
+    }
+    const allowed = new Set(Object.keys(properties));
+    if (allowed.size > 0) {
+      const extra = Object.keys(config).filter((k) => !allowed.has(k));
+      if (extra.length > 0) {
+        throw new Error(
+          `Integration installation ${install.integration}/${install.name}: ` +
+            `unknown config field(s): ${extra.join(", ")}. ` +
+            `Valid keys (from config_schema.json properties): ${[...allowed].join(", ") || "(none)"}.`,
+        );
+      }
+    }
+  }
+}
+
 function reportSummary(ops: LoadedOps): void {
   const parts: string[] = [];
   if (ops.users.length > 0) parts.push(`${ops.users.length} user(s)`);
@@ -883,7 +1101,10 @@ function reportSummary(ops: LoadedOps): void {
   if (ops.controllers.length > 0) parts.push(`${ops.controllers.length} controller(s)`);
   if (ops.controllerTokens.length > 0) parts.push(`${ops.controllerTokens.length} token(s)`);
   if (ops.edgeAppInstallations.length > 0) {
-    parts.push(`${ops.edgeAppInstallations.length} install(s)`);
+    parts.push(`${ops.edgeAppInstallations.length} edge-install(s)`);
+  }
+  if (ops.integrationInstallations.length > 0) {
+    parts.push(`${ops.integrationInstallations.length} integration-install(s)`);
   }
   console.log(`Applied ${parts.join(", ")}.`);
 }

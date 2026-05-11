@@ -2271,6 +2271,271 @@ export async function resolveEdgeAppByHandleAndVersion(
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// Integration instances. An "installation" of an integration —
+// pins a specific (integration, version) definition with its config,
+// bindings, and bot user. Lifecycle mutations are split: create /
+// update / upgrade / delete / start / pause. The platform tracks
+// status as ACTIVE | PAUSED | ERROR | UPGRADING; ACTIVE↔PAUSED is
+// controlled via the start/pause mutations (not by an isActive
+// field on update).
+// ──────────────────────────────────────────────────────────────────────
+
+export type IntegrationInstanceStatus = "ACTIVE" | "PAUSED" | "ERROR" | "UPGRADING";
+
+export type IntegrationInstanceState = {
+  id: string;
+  tenantId: string;
+  name: string;
+  description?: string | null;
+  integrationId: string;
+  definitionId: string;
+  /** Semver string of the pinned definition. */
+  version: string;
+  /** JSON string — the integration's per-instance config blob. */
+  config: string;
+  /** JSON string — resource bindings (devices, networks, etc. the install references). */
+  bindings: string;
+  botUserId?: string | null;
+  status: IntegrationInstanceStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const INSTANCE_FIELDS = `
+  id tenantId name description integrationId definitionId version
+  config bindings botUserId status createdAt updatedAt
+`;
+
+export async function listIntegrationInstances(
+  client: GraphQLClient,
+  filter?: {
+    integrationId?: string;
+    name?: string;
+    definitionId?: string;
+    version?: string;
+    status?: IntegrationInstanceStatus;
+  },
+): Promise<IntegrationInstanceState[]> {
+  const filterArg: Record<string, unknown> = {};
+  if (filter?.integrationId) filterArg.integrationId = { eq: filter.integrationId };
+  if (filter?.name) filterArg.name = { eq: filter.name };
+  if (filter?.definitionId) filterArg.definitionId = { eq: filter.definitionId };
+  if (filter?.version) filterArg.version = { eq: filter.version };
+  if (filter?.status) filterArg.status = { eq: filter.status };
+  return paginateAll<IntegrationInstanceState>(async (after) => {
+    const query = `
+      query ListIntegrationInstances($filter: IntegrationInstanceFilterInput, $first: Int!, $after: String) {
+        listIntegrationInstances(first: $first, filter: $filter, after: $after) {
+          edges { node { ${INSTANCE_FIELDS} } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    `;
+    const data = await client.request<{
+      listIntegrationInstances: CursorPage<IntegrationInstanceState>;
+    }>(query, { filter: filterArg, first: PAGE_SIZE, after });
+    return data.listIntegrationInstances;
+  });
+}
+
+/**
+ * Lookup by `(integration, name)` — the natural key authors declare.
+ * Returns the first match; the server permits only one instance per
+ * (integrationId, name) so this is unambiguous.
+ */
+export async function getIntegrationInstanceByName(
+  client: GraphQLClient,
+  integrationId: string,
+  name: string,
+): Promise<IntegrationInstanceState | undefined> {
+  const matches = await listIntegrationInstances(client, { integrationId, name });
+  return matches[0];
+}
+
+export async function createIntegrationInstance(
+  client: GraphQLClient,
+  input: {
+    name: string;
+    definitionId: string;
+    config: string;
+    bindings: string;
+    description?: string;
+    botUserId?: string;
+  },
+): Promise<IntegrationInstanceState> {
+  const query = `
+    mutation CreateIntegrationInstance($input: CreateIntegrationInstanceInput!) {
+      createIntegrationInstance(input: $input) {
+        integrationInstance { ${INSTANCE_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    createIntegrationInstance: {
+      integrationInstance: IntegrationInstanceState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input });
+  if (data.createIntegrationInstance.errors.length > 0) {
+    const summary = data.createIntegrationInstance.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`createIntegrationInstance failed: ${summary}`);
+  }
+  if (!data.createIntegrationInstance.integrationInstance) {
+    throw new Error(`createIntegrationInstance returned no instance and no errors.`);
+  }
+  return data.createIntegrationInstance.integrationInstance;
+}
+
+export async function updateIntegrationInstance(
+  client: GraphQLClient,
+  input: {
+    id: string;
+    name?: string;
+    description?: string;
+    config?: string;
+    bindings?: string;
+    botUserId?: string | null;
+  },
+): Promise<IntegrationInstanceState> {
+  const query = `
+    mutation UpdateIntegrationInstance($input: UpdateIntegrationInstanceInput!) {
+      updateIntegrationInstance(input: $input) {
+        integrationInstance { ${INSTANCE_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    updateIntegrationInstance: {
+      integrationInstance: IntegrationInstanceState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input });
+  if (data.updateIntegrationInstance.errors.length > 0) {
+    const summary = data.updateIntegrationInstance.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`updateIntegrationInstance failed: ${summary}`);
+  }
+  if (!data.updateIntegrationInstance.integrationInstance) {
+    throw new Error(`updateIntegrationInstance returned no instance and no errors.`);
+  }
+  return data.updateIntegrationInstance.integrationInstance;
+}
+
+export async function upgradeIntegrationInstance(
+  client: GraphQLClient,
+  input: {
+    id: string;
+    toDefinitionId: string;
+    bindings?: string;
+    configOverrides?: string;
+  },
+): Promise<IntegrationInstanceState> {
+  const query = `
+    mutation UpgradeIntegrationInstance($input: UpgradeIntegrationInstanceInput!) {
+      upgradeIntegrationInstance(input: $input) {
+        integrationInstance { ${INSTANCE_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    upgradeIntegrationInstance: {
+      integrationInstance: IntegrationInstanceState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input });
+  if (data.upgradeIntegrationInstance.errors.length > 0) {
+    const summary = data.upgradeIntegrationInstance.errors
+      .map((e) => `${e.path}: ${e.message}`)
+      .join("; ");
+    throw new Error(`upgradeIntegrationInstance failed: ${summary}`);
+  }
+  if (!data.upgradeIntegrationInstance.integrationInstance) {
+    throw new Error(`upgradeIntegrationInstance returned no instance and no errors.`);
+  }
+  return data.upgradeIntegrationInstance.integrationInstance;
+}
+
+export async function startIntegrationInstance(
+  client: GraphQLClient,
+  id: string,
+): Promise<IntegrationInstanceState> {
+  const query = `
+    mutation StartIntegrationInstance($input: StartIntegrationInstanceInput!) {
+      startIntegrationInstance(input: $input) {
+        integrationInstance { ${INSTANCE_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    startIntegrationInstance: {
+      integrationInstance: IntegrationInstanceState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input: { id } });
+  if (data.startIntegrationInstance.errors.length > 0) {
+    throw new Error(
+      `startIntegrationInstance failed: ${data.startIntegrationInstance.errors
+        .map((e) => `${e.path}: ${e.message}`)
+        .join("; ")}`,
+    );
+  }
+  if (!data.startIntegrationInstance.integrationInstance) {
+    throw new Error(`startIntegrationInstance returned no instance and no errors.`);
+  }
+  return data.startIntegrationInstance.integrationInstance;
+}
+
+export async function pauseIntegrationInstance(
+  client: GraphQLClient,
+  id: string,
+): Promise<IntegrationInstanceState> {
+  const query = `
+    mutation PauseIntegrationInstance($input: PauseIntegrationInstanceInput!) {
+      pauseIntegrationInstance(input: $input) {
+        integrationInstance { ${INSTANCE_FIELDS} }
+        errors { path message }
+      }
+    }
+  `;
+  const data = await client.request<{
+    pauseIntegrationInstance: {
+      integrationInstance: IntegrationInstanceState | null;
+      errors: FieldError[];
+    };
+  }>(query, { input: { id } });
+  if (data.pauseIntegrationInstance.errors.length > 0) {
+    throw new Error(
+      `pauseIntegrationInstance failed: ${data.pauseIntegrationInstance.errors
+        .map((e) => `${e.path}: ${e.message}`)
+        .join("; ")}`,
+    );
+  }
+  if (!data.pauseIntegrationInstance.integrationInstance) {
+    throw new Error(`pauseIntegrationInstance returned no instance and no errors.`);
+  }
+  return data.pauseIntegrationInstance.integrationInstance;
+}
+
+export async function deleteIntegrationInstance(
+  client: GraphQLClient,
+  id: string,
+): Promise<void> {
+  const query = `
+    mutation DeleteIntegrationInstance($input: DeleteIntegrationInstanceInput!) {
+      deleteIntegrationInstance(input: $input) { success }
+    }
+  `;
+  await client.request(query, { input: { id } });
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // Workflows. The platform models a workflow as a mutable workflow row
 // with immutable version snapshots and a `currentVersionId` pointer
 // (cf. custom apps' working-copy-plus-snapshots model). Triggers are

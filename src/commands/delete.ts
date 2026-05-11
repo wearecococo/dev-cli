@@ -4,10 +4,12 @@ import {
   deleteDevice,
   deleteEdgeAppInstallation,
   deleteIAMPolicy,
+  deleteIntegrationInstance,
   deleteNetwork,
   deleteTeam,
   deleteUser,
   deleteWorkflow,
+  getIntegrationInstanceByName,
   getWorkflowByName,
   detachCustomAppTeam,
   detachCustomAppUser,
@@ -41,7 +43,8 @@ export type DeleteKind =
   | "controller"
   | "controller-token"
   | "edge-app-installation"
-  | "workflow";
+  | "workflow"
+  | "integration-installation";
 
 /**
  * Remove a tenant-IAM resource from the platform. The flat ops files
@@ -178,10 +181,42 @@ export async function runDelete(
     await deleteWorkflowByHandle(client, args[0]!);
     return;
   }
+  if (kind === "integration-installation") {
+    if (args.length !== 2) {
+      throw new Error(
+        `cococo delete integration-installation <integration> <name> — got ${args.length} arg(s).`,
+      );
+    }
+    await deleteIntegrationInstallation(client, args[0]!, args[1]!);
+    await syncStateAfterDelete({
+      kind: "integration_installation",
+      integration: args[0]!,
+      name: args[1]!,
+    });
+    return;
+  }
   throw new Error(
     `cococo delete: unknown kind '${kind}'. Use user | policy | iam-policy-binding | ` +
       `network | device | team | team-member | custom-app-user-binding | ` +
-      `custom-app-team-binding | controller | controller-token | edge-app-installation | workflow.`,
+      `custom-app-team-binding | controller | controller-token | edge-app-installation | ` +
+      `workflow | integration-installation.`,
+  );
+}
+
+export async function deleteIntegrationInstallation(
+  client: GraphQLClient,
+  integration: string,
+  name: string,
+): Promise<void> {
+  const instance = await getIntegrationInstanceByName(client, integration, name);
+  if (!instance) {
+    console.log(`No integration installation '${name}' for integration '${integration}'.`);
+    return;
+  }
+  await deleteIntegrationInstance(client, instance.id);
+  console.log(`Deleted integration installation ${integration}/${name} (${instance.id}).`);
+  console.log(
+    `  Remember to remove the entry from integration_installations.ts to keep apply consistent.`,
   );
 }
 

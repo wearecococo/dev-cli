@@ -287,6 +287,16 @@ function* declaredEntries(
       spec: managedSpecFromDeclared("edge_app_installation", i),
     };
   }
+  for (const i of ops.integrationInstallations) {
+    yield {
+      identity: {
+        kind: "integration_installation",
+        integration: i.integration,
+        name: i.name,
+      },
+      spec: managedSpecFromDeclared("integration_installation", i),
+    };
+  }
 }
 
 /**

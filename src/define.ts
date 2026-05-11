@@ -242,7 +242,8 @@ export type ManifestKind =
   | "custom_app_team_bindings"
   | "controllers"
   | "controller_tokens"
-  | "edge_app_installations";
+  | "edge_app_installations"
+  | "integration_installations";
 
 export type Tagged<T, K extends ManifestKind> = T & {
   readonly [KIND_TAG]: K;
@@ -265,7 +266,8 @@ export function manifestKind(value: unknown): ManifestKind | undefined {
     k === "custom_app_team_bindings" ||
     k === "controllers" ||
     k === "controller_tokens" ||
-    k === "edge_app_installations"
+    k === "edge_app_installations" ||
+    k === "integration_installations"
     ? k
     : undefined;
 }
@@ -1176,6 +1178,47 @@ export type EdgeAppInstallation = {
   variables?: Record<string, unknown>;
 };
 
+/**
+ * An installation of an integration definition on the tenant. Identity
+ * is `(integration, name)` — you can install the same integration
+ * multiple times under different names (e.g. `production` vs
+ * `staging`). The pin is `(integration, version)` against an ACTIVE
+ * definition on the server.
+ *
+ * Two opaque blobs:
+ *  - `config`   → per-instance config; server validates against the
+ *                 integration's `bundle.configSchema` (which the CLI
+ *                 picks up automatically from
+ *                 `integrations/<handle>/config_schema.json` at push
+ *                 time). Plan/apply runs the same validation locally
+ *                 before sending so you get clear errors up front.
+ *  - `bindings` → maps the integration's declared `resources[].id` to
+ *                 actual resources on the tenant (device identifier,
+ *                 network name, controller handle, etc.). Validated
+ *                 against the integration's `resources` array.
+ *
+ * `isActive` controls runtime state — true ⇒ START, false ⇒ PAUSE.
+ * Status comparison happens after create/update so transitions are
+ * driven explicitly by the declared value.
+ */
+export type IntegrationInstallation = {
+  /** Integration handle (reverse-domain id, e.g. `com.acme.orders`). */
+  integration: string;
+  /** Per-installation natural name — unique within `(integration, name)`. */
+  name: string;
+  /** Semver of the published integration definition to pin against. */
+  version: string;
+  /** Per-instance config; shape comes from the integration's `config_schema.json`. */
+  config?: Record<string, unknown>;
+  /** Mapping from `resources[].id` → tenant resource identifier (device/network/controller/etc.). */
+  bindings?: Record<string, string>;
+  /** A `BOT` user (email or `User` object); cloud-side IAM principal for `bridge.graphql` calls. */
+  botUser?: UserRef;
+  description?: string;
+  /** Default true (ACTIVE). Set false to install but keep PAUSED. */
+  isActive?: boolean;
+};
+
 export function defineControllers(
   controllers: Controller[],
 ): Tagged<{ controllers: Controller[] }, "controllers"> {
@@ -1186,6 +1229,16 @@ export function defineControllerTokens(
   tokens: ControllerToken[],
 ): Tagged<{ tokens: ControllerToken[] }, "controller_tokens"> {
   return Object.assign({}, { tokens }, { [KIND_TAG]: "controller_tokens" as const });
+}
+
+export function defineIntegrationInstallations(
+  installations: IntegrationInstallation[],
+): Tagged<{ installations: IntegrationInstallation[] }, "integration_installations"> {
+  return Object.assign(
+    {},
+    { installations },
+    { [KIND_TAG]: "integration_installations" as const },
+  );
 }
 
 export function defineEdgeAppInstallations(

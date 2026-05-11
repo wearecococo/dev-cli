@@ -14,6 +14,7 @@ import {
   type EdgeAppInstallation,
   type IAMPolicy,
   type IAMPolicyBinding,
+  type IntegrationInstallation,
   type Network,
   type Team,
   type User,
@@ -30,6 +31,7 @@ export const CUSTOM_APP_TEAM_BINDINGS_FILENAME = "custom_app_team_bindings.ts";
 export const CONTROLLERS_FILENAME = "controllers.ts";
 export const CONTROLLER_TOKENS_FILENAME = "controller_tokens.ts";
 export const EDGE_APP_INSTALLATIONS_FILENAME = "edge_app_installations.ts";
+export const INTEGRATION_INSTALLATIONS_FILENAME = "integration_installations.ts";
 
 export type LoadedOps = {
   /** Absolute paths to the files that were loaded. */
@@ -45,6 +47,7 @@ export type LoadedOps = {
     controllers?: string;
     controllerTokens?: string;
     edgeAppInstallations?: string;
+    integrationInstallations?: string;
   };
   users: User[];
   policies: IAMPolicy[];
@@ -57,6 +60,7 @@ export type LoadedOps = {
   controllers: Controller[];
   controllerTokens: ControllerToken[];
   edgeAppInstallations: EdgeAppInstallation[];
+  integrationInstallations: IntegrationInstallation[];
 };
 
 /**
@@ -83,6 +87,7 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
   const controllersPath = resolve(repoRoot, CONTROLLERS_FILENAME);
   const controllerTokensPath = resolve(repoRoot, CONTROLLER_TOKENS_FILENAME);
   const edgeAppInstallationsPath = resolve(repoRoot, EDGE_APP_INSTALLATIONS_FILENAME);
+  const integrationInstallationsPath = resolve(repoRoot, INTEGRATION_INSTALLATIONS_FILENAME);
 
   const out: LoadedOps = {
     files: {},
@@ -97,6 +102,7 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     controllers: [],
     controllerTokens: [],
     edgeAppInstallations: [],
+    integrationInstallations: [],
   };
 
   if (existsSync(usersPath)) {
@@ -159,6 +165,14 @@ export async function loadOps(repoRoot: string): Promise<LoadedOps> {
     );
     out.files.edgeAppInstallations = edgeAppInstallationsPath;
   }
+  if (existsSync(integrationInstallationsPath)) {
+    out.integrationInstallations = await loadList(
+      integrationInstallationsPath,
+      "integration_installations",
+      "installations",
+    );
+    out.files.integrationInstallations = integrationInstallationsPath;
+  }
 
   validateNoDuplicates(out);
   return out;
@@ -175,7 +189,8 @@ type OpsKind =
   | "custom_app_team_bindings"
   | "controllers"
   | "controller_tokens"
-  | "edge_app_installations";
+  | "edge_app_installations"
+  | "integration_installations";
 type OpsField =
   | "users"
   | "policies"
@@ -225,7 +240,8 @@ function expectedKindHelper(kind: OpsKind): string {
   if (kind === "custom_app_team_bindings") return "CustomAppTeamBindings";
   if (kind === "controllers") return "Controllers";
   if (kind === "controller_tokens") return "ControllerTokens";
-  return "EdgeAppInstallations";
+  if (kind === "edge_app_installations") return "EdgeAppInstallations";
+  return "IntegrationInstallations";
 }
 
 /**
@@ -383,5 +399,16 @@ function validateNoDuplicates(ops: LoadedOps): void {
       );
     }
     seenInstalls.add(key);
+  }
+  const seenIntegrationInstalls = new Set<string>();
+  for (const i of ops.integrationInstallations) {
+    const key = `${norm(i.integration)}|${norm(i.name)}`;
+    if (seenIntegrationInstalls.has(key)) {
+      throw new Error(
+        `Duplicate integration installation ${i.integration} '${i.name}' in integration_installations.ts. ` +
+          `(integration, name) is the natural key — use different names for multiple installs of the same integration.`,
+      );
+    }
+    seenIntegrationInstalls.add(key);
   }
 }
