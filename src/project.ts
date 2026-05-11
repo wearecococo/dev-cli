@@ -94,8 +94,27 @@ export function makeFolder(absPath: string): IntegrationFolder {
 const SKIP_DIRS = new Set(["node_modules", ".git", ".cococo"]);
 
 /**
+ * Underscore-prefixed entries (files or directories) are treated as
+ * "support" — README files, swagger schemas, design docs, fixtures.
+ * The walker skips them entirely, so they don't land in the bundle
+ * uploaded to the server and don't trigger stray-manifest-source
+ * errors. Hugo / Jekyll / many other site-generator tools use the
+ * same convention; visible in file browsers (unlike dotfiles) but
+ * clearly opt-out from the artifact.
+ *
+ * Examples:
+ *   integrations/foo/_assets/swagger.json     ← ignored (dir)
+ *   integrations/foo/_README.md               ← ignored (file)
+ *   integrations/foo/_design-notes/           ← ignored (dir)
+ */
+function isSupportEntry(name: string): boolean {
+  return name.startsWith("_");
+}
+
+/**
  * Walk all files under the integration folder, excluding the manifest itself,
- * dotfiles/dotdirs, and SKIP_DIRS. Returns POSIX-relative paths.
+ * dotfiles/dotdirs, SKIP_DIRS, and underscore-prefixed support entries.
+ * Returns POSIX-relative paths.
  */
 export function walkIntegrationFiles(folder: IntegrationFolder): Map<string, string> {
   const out = new Map<string, string>();
@@ -106,6 +125,7 @@ export function walkIntegrationFiles(folder: IntegrationFolder): Map<string, str
 function walk(dir: string, folder: IntegrationFolder, out: Map<string, string>): void {
   for (const entry of readdirSync(dir)) {
     if (entry.startsWith(".")) continue;
+    if (isSupportEntry(entry)) continue;
     const abs = join(dir, entry);
     const st = statSync(abs);
     if (st.isDirectory()) {

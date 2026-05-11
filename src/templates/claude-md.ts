@@ -199,6 +199,10 @@ workspace overrides under \`.cococo/generated/\`.
   \`manifest.yaml\` (engine_version: 1) until migrated.
 - Prefer \`luaFile("./path.lua")\` references over inline
   \`lua\\\`…\\\`\` blocks for anything longer than a one-liner.
+- **Underscore-prefixed entries (\`_assets/\`, \`_README.md\`, \`_design-notes/\`)
+  inside an artifact folder are skipped by the bundler** — keep
+  swagger schemas, design docs, fixtures alongside the source without
+  them landing in the deployed artifact.
 - Use \`\${config:NAME}\` template strings for any value that should be
   resolved per-installation (passwords, tokens, paths). The platform
   resolves them at runtime; the CLI never sees the resolved values.

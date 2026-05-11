@@ -328,8 +328,12 @@ export async function validateLua(
     strict?: boolean;
   },
 ): Promise<LuaValidationResult> {
+  // Modelled as a mutation on the server even though it's idempotent
+  // — validation infra ships under the mutation root. (Older
+  // deployments may still expose it under Query; that's the server's
+  // problem to migrate, not the CLI's to dual-attempt.)
   const query = `
-    query ValidateLua($input: ValidateLuaInput!) {
+    mutation ValidateLua($input: ValidateLuaInput!) {
       validateLua(input: $input) {
         success
         diagnostics { line column severity message code }

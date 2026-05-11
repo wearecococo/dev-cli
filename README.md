@@ -877,6 +877,33 @@ Extensions are the things you build on top of cococo — the
 the tenant-config files. Each lives in its own folder, with a
 `manifest.ts` plus any associated source files.
 
+### Support files (`_*` convention)
+
+Any file or directory inside an artifact folder whose name starts
+with an underscore is **skipped by the walker** — it never lands in
+the uploaded bundle, never triggers stray-source errors, never gets
+considered as a Lua file for linting. Same convention Hugo/Jekyll
+use for partials: visible in your file browser (unlike dotfiles),
+but clearly opt-out from the artifact.
+
+Use it for documentation, swagger schemas, design notes, fixtures
+that travel with the source but aren't part of the deployed artifact:
+
+```
+integrations/orders/
+├── manifest.ts
+├── handlers/
+├── _assets/
+│   └── swagger.json         # API spec — kept alongside the integration
+│                            #   but not uploaded
+├── _design-notes/
+│   └── v2.md                # whole directory skipped
+└── _TODO.md                 # individual file skipped
+```
+
+The same convention applies to custom apps, edge apps, and
+workflows.
+
 ### Authoring an integration
 
 `cococo init <reverse-domain-id>` scaffolds a folder under

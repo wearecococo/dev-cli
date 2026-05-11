@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listAllArtifactFolders } from "../src/project.ts";
+import {
+  listAllArtifactFolders,
+  makeFolder,
+  walkIntegrationFiles,
+} from "../src/project.ts";
 
 let root: string;
 
@@ -61,5 +65,62 @@ describe("listAllArtifactFolders", () => {
     writeFileSync(join(root, "edge_apps", "x", "manifest.ts"), "");
 
     expect(listAllArtifactFolders(root)).toEqual([join(root, "edge_apps", "x")]);
+  });
+});
+
+describe("walkIntegrationFiles — _-prefixed support entries", () => {
+  test("skips _-prefixed files at the artifact root", () => {
+    const folder = join(root, "integrations", "foo");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "manifest.ts"), "");
+    writeFileSync(join(folder, "_swagger.json"), '{ "openapi": "3.0.0" }');
+    writeFileSync(join(folder, "scripts.lua"), "-- code");
+
+    const walked = walkIntegrationFiles(makeFolder(folder));
+    const paths = [...walked.keys()];
+    expect(paths).toContain("scripts.lua");
+    expect(paths).not.toContain("_swagger.json");
+  });
+
+  test("skips _-prefixed directories and everything inside", () => {
+    const folder = join(root, "integrations", "foo");
+    mkdirSync(join(folder, "_assets"), { recursive: true });
+    mkdirSync(join(folder, "_design-notes", "drafts"), { recursive: true });
+    writeFileSync(join(folder, "manifest.ts"), "");
+    writeFileSync(join(folder, "_assets", "swagger.json"), "{}");
+    writeFileSync(join(folder, "_assets", "icon.svg"), "<svg/>");
+    writeFileSync(join(folder, "_design-notes", "drafts", "v2.md"), "# v2");
+    writeFileSync(join(folder, "real.lua"), "-- code");
+
+    const walked = walkIntegrationFiles(makeFolder(folder));
+    const paths = [...walked.keys()];
+    expect(paths).toEqual(["real.lua"]);
+  });
+
+  test("dotfiles, _-prefixed, and node_modules are all skipped together", () => {
+    const folder = join(root, "integrations", "foo");
+    mkdirSync(join(folder, "node_modules", "pkg"), { recursive: true });
+    mkdirSync(join(folder, ".cache"), { recursive: true });
+    mkdirSync(join(folder, "_assets"), { recursive: true });
+    writeFileSync(join(folder, "manifest.ts"), "");
+    writeFileSync(join(folder, "node_modules", "pkg", "index.js"), "");
+    writeFileSync(join(folder, ".cache", "x.tmp"), "");
+    writeFileSync(join(folder, "_assets", "doc.md"), "# doc");
+    writeFileSync(join(folder, "handler.lua"), "-- code");
+
+    const walked = walkIntegrationFiles(makeFolder(folder));
+    expect([...walked.keys()]).toEqual(["handler.lua"]);
+  });
+
+  test("regular files starting with letters/digits are not affected", () => {
+    const folder = join(root, "integrations", "foo");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "manifest.ts"), "");
+    writeFileSync(join(folder, "1readme.md"), "");
+    writeFileSync(join(folder, "a.lua"), "");
+    writeFileSync(join(folder, "z-other.json"), "");
+
+    const walked = walkIntegrationFiles(makeFolder(folder));
+    expect([...walked.keys()].sort()).toEqual(["1readme.md", "a.lua", "z-other.json"]);
   });
 });
