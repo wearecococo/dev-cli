@@ -115,6 +115,13 @@ export function file(path: string): string {
   return marker as unknown as string;
 }
 
+// Re-export JSONLogic types + helpers so author code can do
+//   import { jl, type JSONLogicExpression } from "@wearecococo/dev-cli/define"
+// without a separate import path. Workflow node configs surface
+// JSONLogicExpression on the fields the generated registry marks for it.
+export { jl } from "./jsonlogic.ts";
+export type { JSONLogicExpression, JSONLogicValue } from "./jsonlogic.ts";
+
 // ──────────────────────────────────────────────────────────────────────
 // Manifest shape — discriminated on engineVersion. v1 requires
 // entryScript and forbids v2-only fields; v2 forbids entryScript and

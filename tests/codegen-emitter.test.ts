@@ -59,7 +59,9 @@ describe("emitNodeTypes — per-pattern coverage", () => {
     const out = emit({ switch: loadFixture("switch") });
     expect(out).toContain(`cases: Array<{`);
     expect(out).toMatch(/name: string;/);
-    expect(out).toMatch(/expression: Record<string, unknown>;/);
+    // switch.cases[].expression is a JSONLogic field — emits as
+    // JSONLogicExpression once the description-match rule kicks in.
+    expect(out).toMatch(/expression: JSONLogicExpression;/);
     expect(out).toMatch(/default\?: string;/);
   });
 
@@ -75,9 +77,19 @@ describe("emitNodeTypes — per-pattern coverage", () => {
     expect(out).not.toMatch(/priority\?: "low" \| "normal"/);
   });
 
-  test("type: object with no properties (condition.expression) → Record<string, unknown>", () => {
+  test("type: object with JSONLogic description → JSONLogicExpression (not Record<string, unknown>)", () => {
     const out = emit({ condition: loadFixture("condition") });
-    expect(out).toMatch(/expression: Record<string, unknown>;/);
+    expect(out).toMatch(/expression: JSONLogicExpression;/);
+    expect(out).toContain(
+      `import type { JSONLogicExpression } from "@wearecococo/dev-cli/define";`,
+    );
+  });
+
+  test("type: object with no JSONLogic description → Record<string, unknown>", () => {
+    // graphql.variables is `type: object` with no properties and no
+    // JSONLogic mention — should stay as Record<string, unknown>.
+    const out = emit({ graphql: loadFixture("graphql") });
+    expect(out).toMatch(/variables\?: Record<string, unknown>;/);
   });
 
   test("LuaFileMarker import only emitted when at least one schema uses a lua field", () => {
