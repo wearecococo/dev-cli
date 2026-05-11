@@ -223,7 +223,7 @@ export COCOCO_ENDPOINT=https://your-tenant.cococo.dev/graphql
 export COCOCO_TOKEN=your-bearer-token
 
 # 2. Scaffold a workspace and pull your existing tenant state.
-bunx github:wearecococo/dev-cli cococo bootstrap acme-tenant --pull
+bunx github:wearecococo/dev-cli bootstrap --pull
 cd acme-tenant
 bun install
 
