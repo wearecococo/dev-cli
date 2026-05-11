@@ -20,6 +20,7 @@ import { runMcpAdd } from "./commands/mcp-add.ts";
 import { runUpdateCommand } from "./commands/update.ts";
 import { runPlan } from "./commands/plan.ts";
 import { runLogs, type LogsKind } from "./commands/logs.ts";
+import { runLogin } from "./commands/login.ts";
 import { runStateImport } from "./commands/state-import.ts";
 import {
   runStateForget,
@@ -40,6 +41,22 @@ const apiOpts = () => {
   const o = program.opts<{ endpoint?: string; token?: string }>();
   return { endpoint: o.endpoint, token: o.token };
 };
+
+program
+  .command("login")
+  .description(
+    "Interactively exchange username + password for a tenant API token. " +
+      "Prompts for the server URL, your username, and password, then writes " +
+      "(or merges into) .env in the current directory with COCOCO_ENDPOINT " +
+      "and COCOCO_TOKEN. A stable device ID at ~/.cococo/device-id is " +
+      "generated on first run and reused across logins. Password is never " +
+      "accepted as a flag (would land in shell history); always prompted.",
+  )
+  .option("-e, --endpoint <url>", "Server URL (skips the prompt)")
+  .option("-u, --username <name>", "Username (skips the prompt)")
+  .action(async (opts: { endpoint?: string; username?: string }) => {
+    await runLogin({ endpoint: opts.endpoint, username: opts.username });
+  });
 
 program
   .command("bootstrap [folder]")

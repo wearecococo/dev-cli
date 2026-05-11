@@ -309,6 +309,37 @@ COCOCO_TOKEN=your-bearer-token
 Override per-invocation with `--endpoint` / `--token`. The bootstrap
 scaffold writes a `.env.example` and gitignores `.env` for you.
 
+### `cococo login` — interactive token exchange
+
+If you'd rather not paste a token by hand, `cococo login` does the
+whole exchange interactively:
+
+```sh
+bunx cococo login
+#   Server URL (e.g. https://test9.cococo.app): your-tenant.cococo.dev
+#   Username: alice@acme.com
+#   Password: *********
+# Login successful.
+#   endpoint: https://your-tenant.cococo.dev/graphql
+#   wrote:    /path/to/repo/.env
+```
+
+It POSTs to `<base>/auth/token` with your credentials plus a stable
+device identifier (created once at `~/.cococo/device-id` and reused
+across logins), verifies the returned token with a probe query, then
+merges `COCOCO_ENDPOINT` and `COCOCO_TOKEN` into the workspace `.env`
+— preserving any other keys you've already set.
+
+For unattended / CI use, pass `--endpoint` and `--username` as flags
+and set `COCOCO_PASSWORD` in the environment (the password flag isn't
+exposed; it'd land in shell history).
+
+```sh
+COCOCO_PASSWORD="..." bunx cococo login \
+  --endpoint https://your-tenant.cococo.dev \
+  --username alice@acme.com
+```
+
 ## First-time setup walkthrough
 
 You've signed up to cococo and want to get your print shop running.
@@ -1481,6 +1512,7 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 
 | Command | Purpose |
 |---|---|
+| `cococo login [--endpoint <url>] [--username <name>]` | Interactive token exchange: prompts for server URL, username, and password (masked); generates a stable device ID; verifies the returned token; writes/merges `COCOCO_ENDPOINT` + `COCOCO_TOKEN` into `.env`. Set `COCOCO_PASSWORD` env var for non-interactive use |
 | `cococo bootstrap [folder] [--pull]` | Scaffold a fresh workspace: package.json, .env.example, tsconfig, ops stubs, CLAUDE.md. `--no-claude-md` to skip the project guide. `--pull` also dumps existing tenant state into the ops files |
 | `cococo claude-md [folder]` | Add (or `--force` refresh) the CLAUDE.md project guide in an existing workspace |
 | `cococo dump <kind\|all> [-f]` | Download tenant ops state from the server into local files. Kinds: `users`, `policies`, `iam-policy-bindings`, `networks`, `devices`, `teams`, `custom-app-user-bindings`, `custom-app-team-bindings`, `controllers`, `edge-app-installations`, `all`. Tokens excluded; write-only secrets emit `${config:NAME}` placeholders |
