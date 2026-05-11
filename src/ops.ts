@@ -228,30 +228,47 @@ function expectedKindHelper(kind: OpsKind): string {
   return "EdgeAppInstallations";
 }
 
+/**
+ * Reject duplicate identities at parse time. Comparisons are
+ * **case-insensitive on natural keys** because the state-tracking
+ * `identityKey` lowercases everything — so `Alice@Acme.com` and
+ * `alice@acme.com` would otherwise compile fine, then collide
+ * silently in state. Catch those here with a clear error.
+ */
 function validateNoDuplicates(ops: LoadedOps): void {
-  const seenEmails = new Set<string>();
+  // Tracks first-seen casing per normalized key so the error message
+  // can show the exact text the user wrote.
+  const norm = (s: string) => s.trim().toLowerCase();
+
+  const seenEmails = new Map<string, string>();
   for (const u of ops.users) {
-    if (seenEmails.has(u.email)) {
+    const key = norm(u.email);
+    const prior = seenEmails.get(key);
+    if (prior !== undefined) {
       throw new Error(
-        `Duplicate user email '${u.email}' in users.ts. Email is the natural key — each user must appear once.`,
+        `Duplicate user '${u.email}' in users.ts (already declared as '${prior}'). ` +
+          `Email is the natural key (case-insensitive) — each user must appear once.`,
       );
     }
-    seenEmails.add(u.email);
+    seenEmails.set(key, u.email);
   }
-  const seenHandles = new Set<string>();
+  const seenHandles = new Map<string, string>();
   for (const p of ops.policies) {
-    if (seenHandles.has(p.handle)) {
+    const key = norm(p.handle);
+    const prior = seenHandles.get(key);
+    if (prior !== undefined) {
       throw new Error(
-        `Duplicate policy handle '${p.handle}' in iam_policies.ts. Handle is the natural key.`,
+        `Duplicate policy handle '${p.handle}' in iam_policies.ts (already declared as '${prior}'). ` +
+          `Handle is the natural key (case-insensitive).`,
       );
     }
-    seenHandles.add(p.handle);
+    seenHandles.set(key, p.handle);
   }
   const seenBindings = new Set<string>();
   for (const b of ops.policyBindings) {
     const u = userEmail(b.user);
     const p = iamPolicyHandle(b.policy);
-    const key = `${u}|${p}`;
+    const key = `${norm(u)}|${norm(p)}`;
     if (seenBindings.has(key)) {
       throw new Error(
         `Duplicate IAM policy binding ${u} → ${p} in iam_policy_bindings.ts.`,
@@ -259,52 +276,61 @@ function validateNoDuplicates(ops: LoadedOps): void {
     }
     seenBindings.add(key);
   }
-  const seenNetworks = new Set<string>();
+  const seenNetworks = new Map<string, string>();
   for (const n of ops.networks) {
-    if (seenNetworks.has(n.name)) {
+    const key = norm(n.name);
+    const prior = seenNetworks.get(key);
+    if (prior !== undefined) {
       throw new Error(
-        `Duplicate network name '${n.name}' in networks.ts. Name is the natural key.`,
+        `Duplicate network name '${n.name}' in networks.ts (already declared as '${prior}'). ` +
+          `Name is the natural key (case-insensitive).`,
       );
     }
-    seenNetworks.add(n.name);
+    seenNetworks.set(key, n.name);
   }
-  const seenDevices = new Set<string>();
+  const seenDevices = new Map<string, string>();
   for (const d of ops.devices) {
-    if (seenDevices.has(d.identifier)) {
+    const key = norm(d.identifier);
+    const prior = seenDevices.get(key);
+    if (prior !== undefined) {
       throw new Error(
-        `Duplicate device identifier '${d.identifier}' in devices.ts. Identifier is the natural key.`,
+        `Duplicate device identifier '${d.identifier}' in devices.ts (already declared as '${prior}').`,
       );
     }
-    seenDevices.add(d.identifier);
+    seenDevices.set(key, d.identifier);
   }
-  const seenTeams = new Set<string>();
+  const seenTeams = new Map<string, string>();
   for (const t of ops.teams) {
-    if (seenTeams.has(t.name)) {
+    const key = norm(t.name);
+    const prior = seenTeams.get(key);
+    if (prior !== undefined) {
       throw new Error(
-        `Duplicate team name '${t.name}' in teams.ts. Name is the natural key.`,
+        `Duplicate team name '${t.name}' in teams.ts (already declared as '${prior}').`,
       );
     }
-    seenTeams.add(t.name);
+    seenTeams.set(key, t.name);
     // Member emails inside a single team must also be unique — adding
     // the same user twice is a no-op on the server but a clear authoring
     // mistake worth flagging.
     if (t.members) {
-      const seenMembers = new Set<string>();
+      const seenMembers = new Map<string, string>();
       for (const m of t.members) {
         const email = userEmail(m);
-        if (seenMembers.has(email)) {
+        const memberKey = norm(email);
+        const memberPrior = seenMembers.get(memberKey);
+        if (memberPrior !== undefined) {
           throw new Error(
-            `Duplicate member '${email}' in team '${t.name}' in teams.ts.`,
+            `Duplicate member '${email}' in team '${t.name}' in teams.ts (already as '${memberPrior}').`,
           );
         }
-        seenMembers.add(email);
+        seenMembers.set(memberKey, email);
       }
     }
   }
   const seenAppUsers = new Set<string>();
   for (const b of ops.customAppUserBindings) {
     const u = userEmail(b.user);
-    const key = `${u}|${b.app}`;
+    const key = `${norm(u)}|${norm(b.app)}`;
     if (seenAppUsers.has(key)) {
       throw new Error(
         `Duplicate custom-app user binding ${u} → ${b.app} in custom_app_user_bindings.ts.`,
@@ -315,7 +341,7 @@ function validateNoDuplicates(ops: LoadedOps): void {
   const seenAppTeams = new Set<string>();
   for (const b of ops.customAppTeamBindings) {
     const t = teamName(b.team);
-    const key = `${t}|${b.app}`;
+    const key = `${norm(t)}|${norm(b.app)}`;
     if (seenAppTeams.has(key)) {
       throw new Error(
         `Duplicate custom-app team binding ${t} → ${b.app} in custom_app_team_bindings.ts.`,
@@ -323,19 +349,21 @@ function validateNoDuplicates(ops: LoadedOps): void {
     }
     seenAppTeams.add(key);
   }
-  const seenControllers = new Set<string>();
+  const seenControllers = new Map<string, string>();
   for (const c of ops.controllers) {
-    if (seenControllers.has(c.handle)) {
+    const key = norm(c.handle);
+    const prior = seenControllers.get(key);
+    if (prior !== undefined) {
       throw new Error(
-        `Duplicate controller handle '${c.handle}' in controllers.ts. Handle is the natural key.`,
+        `Duplicate controller handle '${c.handle}' in controllers.ts (already declared as '${prior}').`,
       );
     }
-    seenControllers.add(c.handle);
+    seenControllers.set(key, c.handle);
   }
   const seenTokens = new Set<string>();
   for (const t of ops.controllerTokens) {
     const ctrl = controllerHandle(t.controller);
-    const key = `${ctrl}|${t.name}`;
+    const key = `${norm(ctrl)}|${norm(t.name)}`;
     if (seenTokens.has(key)) {
       throw new Error(
         `Duplicate controller token ${ctrl}/${t.name} in controller_tokens.ts. ` +
@@ -347,7 +375,7 @@ function validateNoDuplicates(ops: LoadedOps): void {
   const seenInstalls = new Set<string>();
   for (const i of ops.edgeAppInstallations) {
     const ctrl = controllerHandle(i.controller);
-    const key = `${ctrl}|${i.app}`;
+    const key = `${norm(ctrl)}|${norm(i.app)}`;
     if (seenInstalls.has(key)) {
       throw new Error(
         `Duplicate edge-app installation ${i.app} on ${ctrl} in edge_app_installations.ts. ` +

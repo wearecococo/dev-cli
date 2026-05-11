@@ -133,6 +133,16 @@ export function stableDigest(value: unknown): string {
   return createHash("sha256").update(canonicalize(value)).digest("hex");
 }
 
+/**
+ * Stable-stringify any JSON-serialisable value: object keys are sorted
+ * recursively so two structurally-equal inputs always produce the
+ * same string. Useful anywhere structural equality matters (digests,
+ * snapshot comparisons, diff equality checks).
+ */
+export function canonicalJson(value: unknown): string {
+  return canonicalize(value);
+}
+
 function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) {

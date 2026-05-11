@@ -129,6 +129,15 @@ export async function runStateImport(
   if (willBeCreated.length > 0) {
     console.log(`Run 'cococo apply' to create the ${willBeCreated.length} declared-but-not-yet-on-server resource(s).`);
   }
+  if (adopted.length > 0) {
+    console.log("");
+    console.log(
+      `Tip: your local config files may not exactly match the live tenant's view of the ` +
+        `adopted resources (different field ordering, missing optional fields, etc.). ` +
+        `Run 'cococo dump all -f' to refresh the config files from the server, then ` +
+        `'cococo plan' to see the remaining declared-vs-server drift.`,
+    );
+  }
 }
 
 function countOrphans(

@@ -558,7 +558,7 @@ function parseMaybeJson(value: string | null | undefined): unknown {
  * `type` + one typed slot). Map it back to the author-side
  * discriminated union (`{ kind: ..., ...flat fields }`).
  */
-function serverTriggerToAuthorConfig(json: string): Record<string, unknown> {
+export function serverTriggerToAuthorConfig(json: string): Record<string, unknown> {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(json) as Record<string, unknown>;

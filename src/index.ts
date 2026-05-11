@@ -20,6 +20,12 @@ import { runMcpAdd } from "./commands/mcp-add.ts";
 import { runUpdateCommand } from "./commands/update.ts";
 import { runPlan } from "./commands/plan.ts";
 import { runStateImport } from "./commands/state-import.ts";
+import {
+  runStateForget,
+  runStateListUnmanaged,
+  runStateRefresh,
+  type ForgetKind,
+} from "./commands/state-subcommands.ts";
 
 const program = new Command();
 
@@ -279,6 +285,61 @@ state
   .option("--force", "Overwrite an existing state file", false)
   .action(async (opts: { yes: boolean; force: boolean }) => {
     await runStateImport({ yes: opts.yes, force: opts.force }, apiOpts());
+  });
+
+state
+  .command("list-unmanaged")
+  .description(
+    "List resources on the server that aren't tracked in this workspace's state. " +
+      "Useful when adopting an existing tenant or auditing what other workspaces / " +
+      "dashboard users have created. Bindings, controller tokens, and edge-app " +
+      "installations require per-parent traversal and aren't enumerated.",
+  )
+  .action(async () => {
+    await runStateListUnmanaged(apiOpts());
+  });
+
+state
+  .command("forget <kind> [args...]")
+  .description(
+    "Stop tracking a resource in state without deleting it server-side. Mirrors " +
+      "the kind vocabulary of `cococo delete`. Use when handing off a resource " +
+      "to another workspace or splitting a single repo into multiple state-tracked " +
+      "ones. Remove the corresponding entry from your config file too, otherwise " +
+      "the next apply re-adopts it.",
+  )
+  .action(async (kind: string, args: string[]) => {
+    const allowed: ForgetKind[] = [
+      "user",
+      "policy",
+      "iam-policy-binding",
+      "network",
+      "device",
+      "team",
+      "custom-app-user-binding",
+      "custom-app-team-binding",
+      "controller",
+      "controller-token",
+      "edge-app-installation",
+    ];
+    if (!allowed.includes(kind as ForgetKind)) {
+      throw new Error(
+        `cococo state forget: unknown kind '${kind}'. Use ${allowed.join(" | ")}.`,
+      );
+    }
+    await runStateForget(kind as ForgetKind, args);
+  });
+
+state
+  .command("refresh")
+  .description(
+    "Re-pull lastAppliedSpec for every state entry from the live tenant. Use " +
+      "after manual server edits or out-of-band changes when you want state to " +
+      "reflect server reality without applying any local changes. Resources that " +
+      "no longer exist on the server are dropped from state.",
+  )
+  .action(async () => {
+    await runStateRefresh(apiOpts());
   });
 
 program

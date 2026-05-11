@@ -3,19 +3,28 @@ import {
   findEdgeAppDraft,
   getCustomAppByHandle,
   getDefinition,
+  getWorkflowByName,
+  getWorkflowVersion,
+  listWorkflowTriggers,
   type CustomAppState,
   type EdgeAppState,
+  type WorkflowTriggerState,
+  type WorkflowVersionState,
+  type WorkflowState,
 } from "../graphql/operations.ts";
 import { loadConfig, type ConfigOverrides } from "../config.ts";
 import { walkIntegrationFiles } from "../project.ts";
 import { bundleToFiles } from "../bundle.ts";
 import { diffFiles, summarize, type FileDiff } from "../diff.ts";
 import { manifestEngineVersion, manifestFromGraphql } from "../manifest.ts";
+import { serverTriggerToAuthorConfig } from "../printer.ts";
+import { canonicalJson } from "../update.ts";
 import { extractManifestSources, partitionFiles } from "../sources.ts";
 import type {
   LoadedCustomApp,
   LoadedEdgeApp,
   LoadedIntegration,
+  LoadedWorkflow,
 } from "../loader.ts";
 import { findDefinition, loadLocal } from "./_shared.ts";
 
@@ -35,14 +44,148 @@ export async function runStatus(
     return;
   }
   if (loaded.kind === "workflow") {
-    console.log(
-      `${loaded.workflow.handle}: workflow status diff is not yet implemented. ` +
-        `Use 'cococo lint' to validate the definition or 'cococo push' to snapshot a new version.`,
-    );
+    await statusWorkflow(client, loaded);
     return;
   }
   await statusIntegration(client, folder, loaded);
 }
+
+async function statusWorkflow(
+  client: GraphQLClient,
+  loaded: LoadedWorkflow,
+): Promise<void> {
+  const { workflow: local } = loaded;
+  const remote = await getWorkflowByName(client, local.name);
+  if (!remote) {
+    console.log(`workflow ${local.handle}: no remote row yet.`);
+    console.log(`  Run 'cococo push' to create it.`);
+    return;
+  }
+  console.log(`workflow ${local.handle} → ${remote.id}`);
+
+  // Top-level row fields.
+  diffScalar("name", local.name, remote.name);
+  diffScalar("description", local.description ?? null, remote.description ?? null);
+  diffScalar("isActive", local.is_active, remote.isActive);
+  diffScalar(
+    "defaultNodeTimeoutSeconds",
+    local.default_node_timeout_seconds ?? null,
+    remote.defaultNodeTimeoutSeconds ?? null,
+  );
+
+  if (!remote.currentVersionId) {
+    console.log(
+      `  (no active version yet — push has created drafts but publish hasn't ` +
+        `flipped the active pointer. 'cococo push' followed by 'cococo publish ${local.handle}' will publish the latest snapshot.)`,
+    );
+  } else {
+    const version = await getWorkflowVersion(client, remote.currentVersionId);
+    diffWorkflowDefinition(local, version);
+  }
+
+  const remoteTriggers = await listWorkflowTriggers(client, remote.id);
+  diffWorkflowTriggers(local.triggers, remoteTriggers);
+}
+
+function diffScalar(label: string, local: unknown, remote: unknown): void {
+  const same = canonicalJson(local) === canonicalJson(remote);
+  if (same) return;
+  console.log(`  ${label}: ${formatScalar(remote)} → ${formatScalar(local)}`);
+}
+
+function formatScalar(v: unknown): string {
+  if (v === null || v === undefined) return "(unset)";
+  if (typeof v === "string") return JSON.stringify(v);
+  return String(v);
+}
+
+function diffWorkflowDefinition(
+  local: LoadedWorkflow["workflow"],
+  remote: WorkflowVersionState,
+): void {
+  // Nodes by id.
+  const localNodes = new Map(
+    local.definition.nodes.map((n) => [n.id, canonicalJson({ name: n.name, type: n.type, config: n.config ?? null })]),
+  );
+  const remoteNodes = new Map(
+    remote.definition.nodes.map((n) => [
+      n.id,
+      // Node configs come back as JSON strings on the wire — parse so
+      // canonicalisation compares the structural shape, not the string.
+      canonicalJson({
+        name: n.name,
+        type: n.type,
+        config: n.config ? JSON.parse(n.config) : null,
+      }),
+    ]),
+  );
+  diffMap("nodes", localNodes, remoteNodes);
+
+  // Edges by id.
+  const localEdges = new Map(
+    local.definition.edges.map((e) => [
+      e.id,
+      canonicalJson({ from: e.fromNodeId, to: e.toNodeId, cond: e.condition ?? null }),
+    ]),
+  );
+  const remoteEdges = new Map(
+    remote.definition.edges.map((e) => [
+      e.id,
+      canonicalJson({ from: e.fromNodeId, to: e.toNodeId, cond: e.condition ?? null }),
+    ]),
+  );
+  diffMap("edges", localEdges, remoteEdges);
+
+  // Variables by name. Variable defaultValue is also JSON-stringified
+  // on the wire — parse for like-with-like comparison.
+  const localVars = new Map(
+    local.definition.variables.map((v) => [
+      v.name,
+      canonicalJson({
+        type: v.type,
+        default: v.defaultValue != null ? JSON.parse(v.defaultValue) : null,
+        description: v.description ?? null,
+      }),
+    ]),
+  );
+  const remoteVars = new Map(
+    remote.definition.variables.map((v) => [
+      v.name,
+      canonicalJson({
+        type: v.type,
+        default: v.defaultValue ? JSON.parse(v.defaultValue) : null,
+        description: v.description ?? null,
+      }),
+    ]),
+  );
+  diffMap("variables", localVars, remoteVars);
+}
+
+function diffWorkflowTriggers(
+  local: LoadedWorkflow["workflow"]["triggers"],
+  remote: WorkflowTriggerState[],
+): void {
+  const localMap = new Map(
+    local.map((t) => [
+      t.name,
+      canonicalJson({ config: t.config, isEnabled: t.isEnabled ?? true }),
+    ]),
+  );
+  const remoteMap = new Map(
+    remote.map((t) => [
+      t.name,
+      // Map the wire `{ type: "scheduled", scheduled: {...} }` shape
+      // back to the author-side `{ kind: "scheduled", ...flat }` shape
+      // so logically-equivalent configs compare equal.
+      canonicalJson({
+        config: serverTriggerToAuthorConfig(t.configJSON),
+        isEnabled: t.isEnabled,
+      }),
+    ]),
+  );
+  diffMap("triggers", localMap, remoteMap);
+}
+
 
 async function statusIntegration(
   client: GraphQLClient,

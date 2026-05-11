@@ -94,9 +94,148 @@ function formatDiffLines(
   diff: FieldDiff[],
   colour: (s: string, code: string) => string,
 ): string {
-  return diff
-    .map((d) => `      ${colour(d.path, C.bold)}: ${formatVal(d.lastApplied)} → ${formatVal(d.declared)}`)
-    .join("\n");
+  const lines: string[] = [];
+  for (const d of diff) {
+    // For collection-shaped fields, expand the diff with one + / - line
+    // per element. For team `members`, controller `policy.allowedIoPaths`,
+    // IAM `statements`, etc. — these are the things the user actually
+    // wants to see at a glance.
+    const expanded = tryExpandCollectionDiff(d, colour);
+    if (expanded.length > 0) {
+      lines.push(`      ${colour(d.path, C.bold)}:`);
+      for (const e of expanded) lines.push(`        ${e}`);
+      continue;
+    }
+    lines.push(
+      `      ${colour(d.path, C.bold)}: ${formatVal(d.lastApplied)} → ${formatVal(d.declared)}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * If a diff entry is for a collection-shaped field (`members`,
+ * `allowedIoPaths`, `statements`, etc.), expand it as one + / - line
+ * per element so the user can see what actually changed without
+ * cross-referencing two opaque arrays.
+ *
+ * Returns an empty array if the field shouldn't be expanded — caller
+ * falls back to the scalar-summary line.
+ */
+function tryExpandCollectionDiff(
+  d: FieldDiff,
+  colour: (s: string, code: string) => string,
+): string[] {
+  const lastArr = Array.isArray(d.lastApplied) ? d.lastApplied : null;
+  const declaredArr = Array.isArray(d.declared) ? d.declared : null;
+  if (lastArr || declaredArr) {
+    return arrayDiffLines(lastArr ?? [], declaredArr ?? [], colour);
+  }
+  // Nested object with array fields underneath (e.g. controller `policy`).
+  // Expand one level of nesting.
+  if (
+    d.lastApplied &&
+    typeof d.lastApplied === "object" &&
+    d.declared &&
+    typeof d.declared === "object" &&
+    !Array.isArray(d.lastApplied) &&
+    !Array.isArray(d.declared)
+  ) {
+    const out: string[] = [];
+    const keys = new Set<string>([
+      ...Object.keys(d.lastApplied as object),
+      ...Object.keys(d.declared as object),
+    ]);
+    for (const k of [...keys].sort()) {
+      const lastV = (d.lastApplied as Record<string, unknown>)[k];
+      const declaredV = (d.declared as Record<string, unknown>)[k];
+      if (deepEqualSimple(lastV, declaredV)) continue;
+      if (Array.isArray(lastV) || Array.isArray(declaredV)) {
+        out.push(`${colour(k, C.bold)}:`);
+        for (const line of arrayDiffLines(
+          Array.isArray(lastV) ? lastV : [],
+          Array.isArray(declaredV) ? declaredV : [],
+          colour,
+        )) {
+          out.push(`  ${line}`);
+        }
+      } else {
+        out.push(`${colour(k, C.bold)}: ${formatVal(lastV)} → ${formatVal(declaredV)}`);
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
+function arrayDiffLines(
+  before: unknown[],
+  after: unknown[],
+  colour: (s: string, code: string) => string,
+): string[] {
+  const beforeKeys = new Map<string, unknown>();
+  for (const v of before) beforeKeys.set(elementKey(v), v);
+  const afterKeys = new Map<string, unknown>();
+  for (const v of after) afterKeys.set(elementKey(v), v);
+
+  const lines: string[] = [];
+  for (const [k, v] of beforeKeys) {
+    if (!afterKeys.has(k)) {
+      lines.push(colour(`- ${formatElement(v)}`, C.red));
+    }
+  }
+  for (const [k, v] of afterKeys) {
+    if (!beforeKeys.has(k)) {
+      lines.push(colour(`+ ${formatElement(v)}`, C.green));
+    }
+  }
+  return lines;
+}
+
+/**
+ * Stable string key for an array element. Strings and numbers are
+ * themselves the key; objects fall back to canonical JSON. Used to
+ * detect "same logical entry" when computing + / - element diffs so
+ * we don't flag re-orderings as changes.
+ */
+function elementKey(v: unknown): string {
+  if (v === null || v === undefined) return String(v);
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+    return String(v);
+  }
+  if (typeof v !== "object") return String(v);
+  // Stable JSON: sort keys so {a, b} and {b, a} match.
+  const obj = v as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return JSON.stringify(keys.map((k) => [k, obj[k]]));
+}
+
+function formatElement(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (v === null || v === undefined) return String(v);
+  if (typeof v === "object" && !Array.isArray(v)) {
+    // Render object elements as one-line inline JSON for compactness
+    // — most diffs are 1-3 fields per element.
+    return JSON.stringify(v);
+  }
+  return JSON.stringify(v);
+}
+
+function deepEqualSimple(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!deepEqualSimple(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (typeof a === "object" && typeof b === "object") {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  return false;
 }
 
 function formatVal(v: unknown): string {

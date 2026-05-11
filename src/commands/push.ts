@@ -5,6 +5,7 @@ import {
   createDraft,
   createWorkflow,
   createWorkflowTrigger,
+  deleteWorkflowTrigger,
   createWorkflowVersion,
   findEdgeAppDraft,
   getCustomAppByHandle,
@@ -463,6 +464,27 @@ async function reconcileWorkflowTriggers(
     const config = toTriggerConfigWire(t.config);
     const cur = byName.get(t.name);
     if (cur) {
+      // The server's UpdateWorkflowTriggerInput doesn't accept
+      // versionId — the pin can't be changed in place. If the
+      // declared pin differs from the live one, delete + recreate
+      // so the user's intent lands. The (workflowId, name) key
+      // is preserved across the swap.
+      const pinChanged = (t.versionId ?? null) !== (cur.versionId ?? null);
+      if (pinChanged) {
+        await deleteWorkflowTrigger(client, cur.id);
+        await createWorkflowTrigger(client, {
+          workflowId,
+          name: t.name,
+          config,
+          versionId: t.versionId,
+          isEnabled: t.isEnabled,
+          concurrencyPolicy: t.concurrencyPolicy,
+          maxConcurrentExecutions: t.maxConcurrentExecutions,
+        });
+        const pin = t.versionId ? ` (pinned to version ${t.versionId})` : " (unpinned — tracks active)";
+        console.log(`  trigger ↻ ${t.name}${pin}`);
+        continue;
+      }
       await updateWorkflowTrigger(client, {
         id: cur.id,
         name: t.name,
@@ -482,7 +504,8 @@ async function reconcileWorkflowTriggers(
         concurrencyPolicy: t.concurrencyPolicy,
         maxConcurrentExecutions: t.maxConcurrentExecutions,
       });
-      console.log(`  trigger + ${t.name}`);
+      const pin = t.versionId ? ` (pinned to version ${t.versionId})` : "";
+      console.log(`  trigger + ${t.name}${pin}`);
     }
   }
 }

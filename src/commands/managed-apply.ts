@@ -145,30 +145,65 @@ export async function runManagedApply(
     }
 
     // Execute deletes first (reverse-kind order), then creates/updates.
-    // Bookkeeping accumulates the new state as we go so a mid-apply
-    // failure doesn't lose ground that's already been applied.
+    // `newResources` accumulates the in-flight state as each action
+    // succeeds — so on a mid-apply failure we can persist what *did*
+    // land before re-throwing. Without this, a re-apply after a
+    // partial failure would re-run already-completed creates and (for
+    // controller_token) mint a fresh token on top of one already created.
     const newResources = new Map<string, ManagedResource>();
     for (const r of state.resources) newResources.set(identityKey(r.identity), r);
 
     const ctx = newExecutionCtx(client, ops);
+    let executed = 0;
+    const total =
+      plan.actions.filter((a) => a.op !== "noop").length;
 
-    for (const action of deleteOpsInExecutionOrder(plan.actions)) {
-      await executeAction(ctx, action);
-      newResources.delete(identityKey(action.identity));
-      console.log(`  - ${action.identity.kind.padEnd(28)} ${identityLabel(action.identity)}`);
-    }
-
-    for (const action of nonDeleteOpsInExecutionOrder(plan.actions)) {
-      const result = await executeAction(ctx, action);
-      if (result?.spec) {
-        newResources.set(identityKey(action.identity), {
-          identity: action.identity,
-          lastAppliedSpec: result.spec,
-          lastAppliedAt: new Date().toISOString(),
-        });
+    try {
+      for (const action of deleteOpsInExecutionOrder(plan.actions)) {
+        await executeAction(ctx, action);
+        newResources.delete(identityKey(action.identity));
+        console.log(`  - ${action.identity.kind.padEnd(28)} ${identityLabel(action.identity)}`);
+        executed++;
       }
-      const sym = action.op === "create" ? "+" : "~";
-      console.log(`  ${sym} ${action.identity.kind.padEnd(28)} ${identityLabel(action.identity)}`);
+
+      for (const action of nonDeleteOpsInExecutionOrder(plan.actions)) {
+        const result = await executeAction(ctx, action);
+        if (result?.spec) {
+          newResources.set(identityKey(action.identity), {
+            identity: action.identity,
+            lastAppliedSpec: result.spec,
+            lastAppliedAt: new Date().toISOString(),
+          });
+        }
+        const sym = action.op === "create" ? "+" : "~";
+        console.log(`  ${sym} ${action.identity.kind.padEnd(28)} ${identityLabel(action.identity)}`);
+        executed++;
+      }
+    } catch (err) {
+      // Persist whatever's been applied so far before re-throwing.
+      // The next `cococo apply` will see exactly the operations that
+      // didn't complete and retry only those.
+      const partial: StateFile = {
+        schemaVersion: 1,
+        lastAppliedAt: new Date().toISOString(),
+        resources: [...newResources.values()],
+      };
+      try {
+        await backend.write(partial);
+        console.error(
+          `\nApply failed after ${executed} of ${total} operation(s). ` +
+            `State has been partially saved to .cococo/state.json. ` +
+            `Re-run 'cococo apply' to continue with the remaining operations.`,
+        );
+      } catch (writeErr) {
+        const m = writeErr instanceof Error ? writeErr.message : String(writeErr);
+        console.error(
+          `\nApply failed after ${executed} of ${total} operation(s), AND the partial-state ` +
+            `write also failed (${m}). State on disk is unchanged from before this apply — ` +
+            `re-running will retry every operation, including those that succeeded.`,
+        );
+      }
+      throw err;
     }
 
     const newState: StateFile = {
@@ -178,9 +213,6 @@ export async function runManagedApply(
     };
     await backend.write(newState);
     console.log(`\nWrote .cococo/state.json (${newState.resources.length} resource(s)).`);
-  } catch (err) {
-    // Surface the error; lock is released in the finally below.
-    throw err;
   } finally {
     await release();
   }

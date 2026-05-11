@@ -91,7 +91,22 @@ export default defineUsers([
 ]);
 `,
     );
-    await expect(loadOps(root)).rejects.toThrow(/Duplicate user email 'alice@acme.com'/);
+    await expect(loadOps(root)).rejects.toThrow(/Duplicate user 'alice@acme.com'/);
+  });
+
+  test("rejects case-mismatched user emails (Alice vs alice)", async () => {
+    writeFileSync(
+      join(root, "users.ts"),
+      `import { defineUsers } from "${DEFINE_PATH}";
+export default defineUsers([
+  { email: "Alice@Acme.com" },
+  { email: "alice@acme.com" },
+]);
+`,
+    );
+    await expect(loadOps(root)).rejects.toThrow(
+      /Duplicate user 'alice@acme.com'.*already declared as 'Alice@Acme.com'/,
+    );
   });
 
   test("rejects a duplicate policy handle", async () => {

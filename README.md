@@ -164,6 +164,54 @@ plans currently show those fields as "always changed" until that
 system ships. Use `${config:NAME}` placeholders for production
 secrets so they don't end up in committed state at all.
 
+**Partial-apply recovery.** If `cococo apply` throws mid-execute
+(network blip, server-side validation), state is written with whatever
+already succeeded *before* the error is re-thrown. Re-running picks
+up exactly where the previous attempt left off — successful creates
+aren't redone (so e.g. `controller_token` won't mint duplicates).
+
+**Auxiliary `cococo state` subcommands.**
+
+- `cococo state list-unmanaged` — surface resources on the server
+  this workspace isn't managing. Bindings, controller tokens, and
+  edge-app installations aren't enumerated (per-parent traversal).
+- `cococo state forget <kind> <args>` — stop tracking a resource in
+  state without deleting it server-side. Mirrors the `cococo delete`
+  vocabulary. Remove the corresponding entry from your config file
+  too, otherwise the next apply re-adopts it.
+- `cococo state refresh` — re-pull `lastAppliedSpec` from the live
+  tenant for every tracked resource. Use after manual server edits
+  to re-sync state without applying any local changes.
+
+### Edge cases worth knowing
+
+**Identity comparisons are case-insensitive.** Declarations using
+mixed case (`Alice@Acme.com`) get treated the same as lowercased ones
+(`alice@acme.com`). Duplicate identities — including case-only
+variants — are rejected at parse time with a clear error pointing
+at both declarations.
+
+**Renaming a natural key is delete + create.** Changing a user's
+email or a policy's handle locally produces `delete old`, `create new`
+on the next plan — there's no in-place rename. For policies in
+particular, this momentarily breaks any bindings that reference the
+old handle. Use `cococo state forget` if you want to hand off an
+existing resource to a different identity instead.
+
+**`cococo dump` and state.** Running `cococo dump all -f` rewrites
+local config files from the live tenant. Plan after dump will show
+zero diff for matched resources, but any drift between dumped files
+and state's `lastAppliedSpec` is invisible to plan. Run `cococo state
+refresh` after dump if you want state to reflect what's actually on
+the server.
+
+**Lock recovery.** A held lock at `.cococo/state.lock` whose owning
+process is dead (e.g. someone killed the apply mid-flight) is taken
+over automatically by the next apply — no manual cleanup needed. A
+lock older than 5 minutes is considered stale and forcibly taken;
+override the threshold with `COCOCO_LOCK_TIMEOUT_MS=<n>` in pathological
+CI environments.
+
 ## Quick start
 
 Sixty seconds from zero to a workspace mirroring your tenant:
@@ -1389,6 +1437,9 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 | `cococo apply [--yes] [--allow-destroy]` | Apply tenant ops files at the repo root. Default mode is **additive** — declared rows upsert, undeclared rows untouched. With a `.cococo/state.json` (created by `cococo state import`), switches to **state-tracking** mode where removing a row from a config file deletes it server-side; deletes require `--allow-destroy` |
 | `cococo plan [--json] [--verbose]` | Read-only preview of the next state-tracking apply. Requires a state file (run `cococo state import` first) |
 | `cococo state import [--yes] [--force]` | Bootstrap `.cococo/state.json` from the live tenant. Adopts every declared resource that already exists on the server; declared-but-absent rows will be created on the next apply. Run once per workspace to opt into state-tracking |
+| `cococo state list-unmanaged` | List resources on the server that aren't tracked in this workspace's state. Useful for adoption audits |
+| `cococo state forget <kind> <args>` | Stop tracking a resource in state without deleting it server-side. Mirrors `cococo delete` kinds |
+| `cococo state refresh` | Re-pull `lastAppliedSpec` from the live tenant for every tracked resource. Use after manual server edits to re-sync state |
 | `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `iam-policy-binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user-binding <email> <app>`, `custom-app-team-binding <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>`, `workflow <handle>` |
 | `cococo pull <id\|handle> [--type app\|edge\|workflow] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |
