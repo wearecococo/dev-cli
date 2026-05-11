@@ -19,6 +19,7 @@ import { runMcpSwagger } from "./commands/mcp.ts";
 import { runMcpAdd } from "./commands/mcp-add.ts";
 import { runUpdateCommand } from "./commands/update.ts";
 import { runPlan } from "./commands/plan.ts";
+import { runLogs, type LogsKind } from "./commands/logs.ts";
 import { runStateImport } from "./commands/state-import.ts";
 import {
   runStateForget,
@@ -466,6 +467,39 @@ program
   .action(async (folder: string | undefined) => {
     await runMigrate(folder, apiOpts());
   });
+
+program
+  .command("logs <kind> <target>")
+  .description(
+    "Attach to a server-side log stream over a GraphQL subscription. Kinds: " +
+      "integration <instance-id> (execution logs), workflow <execution-id> " +
+      "(execution logs), edge-app <controller-handle>/<app-handle> " +
+      "(or raw installation ID). Streams to stdout until Ctrl-C; pipe through " +
+      "grep/tee/less for filtering and capture.",
+  )
+  .option("--json", "Emit one JSON object per line instead of human-readable output", false)
+  .option("--no-color", "Strip ANSI colour codes (auto-stripped on non-TTY stdout)", false)
+  .action(
+    async (
+      kind: string,
+      target: string,
+      opts: { json: boolean; color: boolean },
+    ) => {
+      const allowed: LogsKind[] = ["integration", "workflow", "edge-app"];
+      if (!allowed.includes(kind as LogsKind)) {
+        throw new Error(
+          `cococo logs: unknown kind '${kind}'. Use ${allowed.join(" | ")}.`,
+        );
+      }
+      const noColor = !opts.color || !process.stdout.isTTY;
+      await runLogs(
+        kind as LogsKind,
+        target,
+        { json: opts.json, noColor },
+        apiOpts(),
+      );
+    },
+  );
 
 program
   .command("update")

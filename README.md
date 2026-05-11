@@ -1269,6 +1269,39 @@ happens, run `cococo update` to write workspace overrides into
 `.cococo/generated/node-types.d.ts`; add `cococo update --check` to
 your CI to catch stale workspace files.
 
+### Streaming logs
+
+For live tail of execution logs and edge-app events, `cococo logs`
+attaches to a GraphQL subscription over WebSocket. Three shapes:
+
+```sh
+# Integration instance execution logs.
+bunx cococo logs integration intg_xyz
+
+# Workflow execution logs (per run).
+bunx cococo logs workflow wfe_abc
+
+# Edge-app installation events (filtered to LOG-kind).
+bunx cococo logs edge-app press-01/door-monitor
+# or by raw installation ID:
+bunx cococo logs edge-app eai_xyz
+```
+
+The default output is a coloured one-line-per-event format:
+
+```
+14:22:01 INFO  job created id=job_42
+14:22:01 INFO  fetching device config
+14:22:02 ERROR upstream returned 502 {"retryAfter":5}
+```
+
+`--json` emits one JSON object per line for piping into `jq` or a log
+collector. ANSI colour is auto-stripped when stdout isn't a TTY (so
+`cococo logs ... | tee logs.txt` does what you want).
+
+Ctrl-C unsubscribes cleanly. The subscription closes on its own when
+the server reports the execution has finished.
+
 ## Daily workflow
 
 Once the workspace is set up, day-to-day work looks like:
@@ -1440,6 +1473,7 @@ CLAUDE.md                                  # context for Claude Code (delete if 
 | `cococo state list-unmanaged` | List resources on the server that aren't tracked in this workspace's state. Useful for adoption audits |
 | `cococo state forget <kind> <args>` | Stop tracking a resource in state without deleting it server-side. Mirrors `cococo delete` kinds |
 | `cococo state refresh` | Re-pull `lastAppliedSpec` from the live tenant for every tracked resource. Use after manual server edits to re-sync state |
+| `cococo logs <kind> <target> [--json] [--no-color]` | Attach to a server-side log stream over a GraphQL subscription. Kinds: `integration <instance-id>`, `workflow <execution-id>`, `edge-app <controller>/<app>` (or raw installation ID). Streams to stdout until Ctrl-C; pipe through grep/tee/less for filtering and capture |
 | `cococo delete <kind> <args>` | Remove a tenant ops resource. Kinds: `user <email>`, `policy <handle>`, `iam-policy-binding <email> <policy>`, `network <name>`, `device <identifier>`, `team <name>`, `team-member <team> <email>`, `custom-app-user-binding <email> <app>`, `custom-app-team-binding <team> <app>`, `controller <handle>`, `controller-token <controller> <name>`, `edge-app-installation <controller> <app> <version>`, `workflow <handle>` |
 | `cococo pull <id\|handle> [--type app\|edge\|workflow] [-f]` | Download remote into a local folder |
 | `cococo list` | List integrations, custom apps, and edge apps on the server |

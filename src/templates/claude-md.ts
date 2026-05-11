@@ -63,6 +63,7 @@ bunx cococo deprecate <folder>                                # retire PUBLISHED
 bunx cococo pull <id|handle> [--type app|edge|workflow] [-f]  # download remote → local
 bunx cococo apply                                             # apply tenant ops files
 bunx cococo delete <kind> <args>                              # remove a tenant ops resource
+bunx cococo logs <kind> <target>                              # live-tail execution / edge-app logs (Ctrl-C to stop)
 bunx cococo dump <kind|all>                                   # pull server state into local ops files
 bunx cococo list                                              # what's on the server
 \`\`\`
