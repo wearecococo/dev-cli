@@ -403,47 +403,113 @@ function stripNulls(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Resolve an EdgeAppSecretValue projection (or already-string value) into
+ * the string form used by the printed manifest. Server-returned shape is
+ * `{ template, fingerprint, isSet }`: prefer the template literally when
+ * present (round-trips `${config:NAME}` exactly), otherwise fall back to
+ * a placeholder when `isSet` is true but no template (a literal was
+ * stored — the server doesn't return literals, so the author has to
+ * replace the placeholder before pushing), otherwise leave unset.
+ */
+function resolveSecret(
+  value: unknown,
+  placeholderFn: () => string,
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    const p = value as { template?: string | null; isSet?: boolean };
+    if (typeof p.template === "string" && p.template !== "") return p.template;
+    if (p.isSet) return placeholderFn();
+    return undefined;
+  }
+  return undefined;
+}
+
 function transformMqttBroker(
   b: EdgeAppMQTTBroker,
   placeholder: (suffix: string) => string,
 ): unknown {
-  const out = stripNulls(b) as Record<string, unknown>;
-  // Server doesn't return password. If a username is set, fill in a
-  // placeholder so the credential pair is at least visible in the
-  // printed manifest.
-  if (typeof out.username === "string" && out.password === undefined) {
+  const out: Record<string, unknown> = { ...b };
+  out.password = resolveSecret(b.password, () =>
+    placeholder(`MQTT_${b.name}_PASSWORD`),
+  );
+  // If the server didn't return a password projection (older wire shape)
+  // but a username is present, surface a placeholder so the credential
+  // pair is visible.
+  if (out.password === undefined && typeof out.username === "string") {
     out.password = placeholder(`MQTT_${b.name}_PASSWORD`);
   }
-  return out;
+  if (b.tls) {
+    const tls: Record<string, unknown> = { ...b.tls };
+    tls.clientCertPem = resolveSecret(b.tls.clientCertPem, () =>
+      placeholder(`MQTT_${b.name}_CLIENT_CERT_PEM`),
+    );
+    tls.clientKeyPem = resolveSecret(b.tls.clientKeyPem, () =>
+      placeholder(`MQTT_${b.name}_CLIENT_KEY_PEM`),
+    );
+    out.tls = tls;
+  }
+  return stripNulls(out);
 }
 
 function transformOpcuaEndpoint(
   e: EdgeAppOPCUAEndpoint,
   placeholder: (suffix: string) => string,
 ): unknown {
-  const out = stripNulls(e) as Record<string, unknown>;
-  const auth = out.auth as Record<string, unknown> | undefined;
-  if (auth && auth.mode === "USERNAME" && auth.password === undefined) {
-    auth.password = placeholder(`OPCUA_${e.name}_PASSWORD`);
+  const out: Record<string, unknown> = { ...e };
+  if (e.auth) {
+    const auth: Record<string, unknown> = { ...e.auth };
+    auth.password = resolveSecret(e.auth.password, () =>
+      placeholder(`OPCUA_${e.name}_PASSWORD`),
+    );
+    if (auth.password === undefined && auth.mode === "USERNAME") {
+      auth.password = placeholder(`OPCUA_${e.name}_PASSWORD`);
+    }
+    out.auth = auth;
   }
-  return out;
+  if (e.security) {
+    const sec: Record<string, unknown> = { ...e.security };
+    sec.clientCertPem = resolveSecret(e.security.clientCertPem, () =>
+      placeholder(`OPCUA_${e.name}_CLIENT_CERT_PEM`),
+    );
+    sec.clientKeyPem = resolveSecret(e.security.clientKeyPem, () =>
+      placeholder(`OPCUA_${e.name}_CLIENT_KEY_PEM`),
+    );
+    out.security = sec;
+  }
+  return stripNulls(out);
 }
 
 function transformSnmpDevice(
   d: EdgeAppSNMPDevice,
   placeholder: (suffix: string) => string,
 ): unknown {
-  const out = stripNulls(d) as Record<string, unknown>;
-  const v3 = out.v3 as Record<string, unknown> | undefined;
-  if (v3) {
-    if (v3.authProtocol !== undefined && v3.authKey === undefined) {
+  const out: Record<string, unknown> = { ...d };
+  out.community = resolveSecret(d.community, () =>
+    placeholder(`SNMP_${d.name}_COMMUNITY`),
+  );
+  if (out.community === undefined && d.version === "V2C") {
+    out.community = placeholder(`SNMP_${d.name}_COMMUNITY`);
+  }
+  if (d.v3) {
+    const v3: Record<string, unknown> = { ...d.v3 };
+    v3.authKey = resolveSecret(d.v3.authKey, () =>
+      placeholder(`SNMP_${d.name}_AUTH_KEY`),
+    );
+    if (v3.authKey === undefined && d.v3.authProtocol !== undefined) {
       v3.authKey = placeholder(`SNMP_${d.name}_AUTH_KEY`);
     }
-    if (v3.privProtocol !== undefined && v3.privKey === undefined) {
+    v3.privKey = resolveSecret(d.v3.privKey, () =>
+      placeholder(`SNMP_${d.name}_PRIV_KEY`),
+    );
+    if (v3.privKey === undefined && d.v3.privProtocol !== undefined) {
       v3.privKey = placeholder(`SNMP_${d.name}_PRIV_KEY`);
     }
+    out.v3 = v3;
   }
-  return out;
+  return stripNulls(out);
 }
 
 function transformHttpRoute(

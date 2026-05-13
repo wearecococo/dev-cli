@@ -662,6 +662,19 @@ export type EdgeAppLibrary = {
 // Secret-bearing string fields accept literal values OR `${config:NAME}`
 // templates resolved per-installation; the CLI doesn't manipulate
 // either form. camelCase throughout to match the GraphQL input shapes.
+//
+// On read, secret fields surface as an `EdgeAppSecretValue` projection
+// rather than a string — the server never returns the literal value.
+// The shared types below are polymorphic on those fields so they can be
+// reused for both input (string) and output (projection).
+
+export type EdgeAppSecretValueProjection = {
+  template: string | null;
+  fingerprint: string | null;
+  isSet: boolean;
+};
+
+export type EdgeAppSecret = string | EdgeAppSecretValueProjection;
 
 export type EdgeAppMQTTSubscription = {
   topic: string;
@@ -670,8 +683,8 @@ export type EdgeAppMQTTSubscription = {
 
 export type EdgeAppMQTTTLS = {
   caCertPem: string;
-  clientCertPem?: string;
-  clientKeyPem?: string;
+  clientCertPem?: EdgeAppSecret;
+  clientKeyPem?: EdgeAppSecret;
   insecureSkipVerify?: boolean;
 };
 
@@ -687,7 +700,7 @@ export type EdgeAppMQTTBroker = {
   url: string;
   clientId?: string;
   username?: string;
-  password?: string;
+  password?: EdgeAppSecret;
   keepaliveSeconds?: number;
   qos?: number;
   subscriptions: EdgeAppMQTTSubscription[];
@@ -713,14 +726,14 @@ export type EdgeAppOPCUASubscription = {
 export type EdgeAppOPCUAAuth = {
   mode: EdgeAppOPCUAAuthMode;
   username?: string;
-  password?: string;
+  password?: EdgeAppSecret;
 };
 
 export type EdgeAppOPCUASecurity = {
   policy: EdgeAppOPCUASecurityPolicy;
   mode: EdgeAppOPCUASecurityMode;
-  clientCertPem?: string;
-  clientKeyPem?: string;
+  clientCertPem?: EdgeAppSecret;
+  clientKeyPem?: EdgeAppSecret;
 };
 
 export type EdgeAppOPCUAEndpoint = {
@@ -755,9 +768,9 @@ export type EdgeAppSNMPPollGroup = {
 export type EdgeAppSNMPv3 = {
   user: string;
   authProtocol?: EdgeAppSNMPAuthProtocol;
-  authKey?: string;
+  authKey?: EdgeAppSecret;
   privProtocol?: EdgeAppSNMPPrivProtocol;
-  privKey?: string;
+  privKey?: EdgeAppSecret;
   contextName?: string;
 };
 
@@ -767,7 +780,7 @@ export type EdgeAppSNMPDevice = {
   version: EdgeAppSNMPVersion;
   pollGroups: EdgeAppSNMPPollGroup[];
   port?: number;
-  community?: string;
+  community?: EdgeAppSecret;
   v3?: EdgeAppSNMPv3;
   timeoutMs?: number;
   retries?: number;
@@ -882,6 +895,8 @@ const EDGE_APP_SUMMARY = `
   updatedAt
 `;
 
+const SECRET_PROJECTION = `{ template fingerprint isSet }`;
+
 const EDGE_APP_FULL = `
   ${EDGE_APP_SUMMARY}
   triggers { kind name handler schedule path pattern }
@@ -889,24 +904,38 @@ const EDGE_APP_FULL = `
   libraries { name source }
   mqttBrokers {
     name url clientId username keepaliveSeconds qos
+    password ${SECRET_PROJECTION}
     subscriptions { topic handler }
-    tls { caCertPem clientCertPem clientKeyPem insecureSkipVerify }
+    tls {
+      caCertPem insecureSkipVerify
+      clientCertPem ${SECRET_PROJECTION}
+      clientKeyPem ${SECRET_PROJECTION}
+    }
     will { topic payload qos retain }
   }
   opcuaEndpoints {
     name endpoint reconnectIntervalMs
     subscriptions { nodeId handler samplingMs queueSize }
-    auth { mode username }
-    security { policy mode clientCertPem clientKeyPem }
+    auth { mode username password ${SECRET_PROJECTION} }
+    security {
+      policy mode
+      clientCertPem ${SECRET_PROJECTION}
+      clientKeyPem ${SECRET_PROJECTION}
+    }
   }
   snmpDevices {
-    name host version port community timeoutMs retries
+    name host version port timeoutMs retries
+    community ${SECRET_PROJECTION}
     pollGroups {
       name intervalMs handler
       oids { label oid }
       walkPrefixes { label oid }
     }
-    v3 { user authProtocol privProtocol contextName }
+    v3 {
+      user authProtocol privProtocol contextName
+      authKey ${SECRET_PROJECTION}
+      privKey ${SECRET_PROJECTION}
+    }
   }
   modbusPorts {
     name transport host port serialPath baudRate parity stopBits dataBits
