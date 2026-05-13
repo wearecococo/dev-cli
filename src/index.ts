@@ -196,6 +196,11 @@ function parseType(raw: string): "integration" | "app" | "edge" | "workflow" {
   throw new Error(`--type must be 'integration', 'app', 'edge', or 'workflow' (got ${raw}).`);
 }
 
+function parsePullStatus(raw: string): "draft" | "published" | "any" {
+  if (raw === "draft" || raw === "published" || raw === "any") return raw;
+  throw new Error(`--status must be 'draft', 'published', or 'any' (got ${raw}).`);
+}
+
 function parseAppKind(raw: string): "PAGE" | "DASHBOARD" | "KIOSK" | "JOB_VIEW" {
   if (raw === "PAGE" || raw === "DASHBOARD" || raw === "KIOSK" || raw === "JOB_VIEW") return raw;
   throw new Error(
@@ -457,19 +462,32 @@ program
     "Kind of thing to pull",
     "integration",
   )
-  .option("-v, --version <version>", "Specific draft version to pull (integrations only)")
+  .option("-v, --version <version>", "Specific version to pull (integrations only)")
   .option("-f, --force", "Overwrite if the target folder already exists", false)
   .option("--format <ts|yaml>", "Manifest format to emit (integrations only)", "ts")
+  .option(
+    "--status <draft|published|any>",
+    "Constrain which integration status to pull. Default 'any' prefers " +
+      "DRAFT, falls back to the latest published (ACTIVE/DEPRECATED).",
+    "any",
+  )
   .action(
     async (
       idOrHandle: string,
-      opts: { type: string; version?: string; force: boolean; format: string },
+      opts: {
+        type: string;
+        version?: string;
+        force: boolean;
+        format: string;
+        status: string;
+      },
     ) => {
       const type = parseType(opts.type);
       const format = parseFormat(opts.format);
+      const status = parsePullStatus(opts.status);
       await runPull(
         idOrHandle,
-        { version: opts.version, force: opts.force, format, type },
+        { version: opts.version, force: opts.force, format, type, status },
         apiOpts(),
       );
     },

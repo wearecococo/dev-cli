@@ -35,12 +35,20 @@ import {
 } from "../printer.ts";
 import { extractManifestSources } from "../sources.ts";
 
+export type PullStatusFilter = "draft" | "published" | "any";
+
 export type PullOptions = {
   version?: string;
   force: boolean;
   format?: ManifestFormat;
   /** "integration" (default) | "app" | "edge" | "workflow". */
   type?: "integration" | "app" | "edge" | "workflow";
+  /**
+   * Status filter for integrations. Default: prefer DRAFT, fall back to
+   * the latest ACTIVE. "draft" / "published" pin a single status; "any"
+   * picks the highest version across all statuses.
+   */
+  status?: PullStatusFilter;
 };
 
 export async function runPull(
@@ -63,25 +71,46 @@ export async function runPull(
 
   const integrationId = idOrHandle;
   const format: ManifestFormat = opts.format ?? "ts";
+  const statusFilter: PullStatusFilter = opts.status ?? "any";
 
-  const drafts = await listDefinitions(client, { integrationId, status: "DRAFT" });
-  if (drafts.length === 0) {
-    throw new Error(`No DRAFT definition found for ${integrationId}.`);
+  const all = await listDefinitions(client, { integrationId });
+  if (all.length === 0) {
+    throw new Error(`No definitions found for ${integrationId}.`);
   }
 
-  let chosen = drafts[0]!;
+  const drafts = all.filter((d) => d.status === "DRAFT");
+  const actives = all.filter((d) => d.status === "ACTIVE");
+  const deprecateds = all.filter((d) => d.status === "DEPRECATED");
+
+  let pool: typeof all;
+  if (statusFilter === "draft") {
+    pool = drafts;
+    if (pool.length === 0) {
+      throw new Error(`No DRAFT definition found for ${integrationId}.`);
+    }
+  } else if (statusFilter === "published") {
+    pool = [...actives, ...deprecateds];
+    if (pool.length === 0) {
+      throw new Error(`No published (ACTIVE/DEPRECATED) definition found for ${integrationId}.`);
+    }
+  } else {
+    // "any" — prefer DRAFT, then ACTIVE, then DEPRECATED. Falling back
+    // lets `pull` work for integrations that have only ever been published.
+    pool = drafts.length > 0 ? drafts : actives.length > 0 ? actives : deprecateds;
+  }
+
+  let chosen = pool[0]!;
   if (opts.version) {
-    const match = drafts.find((d) => d.version === opts.version);
+    const match = pool.find((d) => d.version === opts.version);
     if (!match) {
       throw new Error(
-        `No DRAFT for ${integrationId}@${opts.version}. Available: ${drafts
-          .map((d) => d.version)
-          .join(", ")}`,
+        `No ${describeStatusFilter(statusFilter)} for ${integrationId}@${opts.version}. ` +
+          `Available: ${pool.map((d) => `${d.version} (${d.status})`).join(", ")}`,
       );
     }
     chosen = match;
-  } else if (drafts.length > 1) {
-    chosen = drafts.slice().sort((a, b) => compareVersions(b.version, a.version))[0]!;
+  } else if (pool.length > 1) {
+    chosen = pool.slice().sort((a, b) => compareVersions(b.version, a.version))[0]!;
   }
 
   const full = await getDefinition(client, chosen.id);
@@ -116,7 +145,7 @@ export async function runPull(
     writeMaterialised(target, bundleFiles);
     const total = bundleFiles.size + sourceFiles.size + 1;
     console.log(
-      `Pulled ${integrationId}@${chosen.version} into integrations/${shortName(
+      `Pulled ${integrationId}@${chosen.version} [${chosen.status}] into integrations/${shortName(
         integrationId,
       )}/ (${total} file(s); manifest.ts + ${sourceFiles.size} v2 source file(s))`,
     );
@@ -130,10 +159,16 @@ export async function runPull(
   writeMaterialised(target, sourceFiles);
   const totalFiles = bundleFiles.size + sourceFiles.size + 1;
   console.log(
-    `Pulled ${integrationId}@${chosen.version} into ${INTEGRATIONS_DIR}/${shortName(
+    `Pulled ${integrationId}@${chosen.version} [${chosen.status}] into ${INTEGRATIONS_DIR}/${shortName(
       integrationId,
     )}/ (${totalFiles} file(s); manifest.yaml + ${sourceFiles.size} v2 source file(s))`,
   );
+}
+
+function describeStatusFilter(s: PullStatusFilter): string {
+  if (s === "draft") return "DRAFT";
+  if (s === "published") return "ACTIVE/DEPRECATED";
+  return "definition";
 }
 
 function writeMaterialised(target: string, files: Map<string, string>): void {
